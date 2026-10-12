@@ -29,7 +29,7 @@ claude plugin marketplace add <folder>
 claude plugin install session-pilot@session-pilot
 ```
 
-Installed from a folder, the mod is read from it: after editing, run `/reload-plugins`.
+To get a new version: `claude plugin marketplace update session-pilot`, then `claude plugin update session-pilot@session-pilot`, then open a new session. Sessions (the desktop app's included) run the installed copy, which changes only when the version in `plugin.json` does: a change to the mod ships with a version bump.
 
 Uninstall: `claude plugin uninstall session-pilot@session-pilot`
 
