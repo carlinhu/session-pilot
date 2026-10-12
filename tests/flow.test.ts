@@ -14,6 +14,8 @@ const surfacePane = { isOpen: false }
 let clock: ReturnType<typeof mock.clock>
 // Prompts the mod submitted.
 const submitted: string[] = []
+// The context each submitted prompt carried.
+const contexts: (readonly string[] | undefined)[] = []
 // Slash commands the mod ran through the engine.
 const ran: string[] = []
 
@@ -52,8 +54,10 @@ function engine(on: On) {
   }))
   on('ui.notify', () => ({ value: { isSent: false, reason: 'no-surface' } }))
   submitted.length = 0
+  contexts.length = 0
   on('prompt.submit', ($, e) => {
     submitted.push(e.text)
+    contexts.push(e.context)
     return { text: e.text }
   })
   on('tool.call', { tool: 'Edit' }, () => ({ result: { ok: true } }))
@@ -303,4 +307,13 @@ test('handoff while idle writes it at once, with no "finish your work" round', a
   await ui.unmount()
   expect(submitted.join(' ')).toMatch(/Write a handoff now from what you already know/)
   expect(submitted.join(' ')).not.toMatch(/nearest consistent point/)
+})
+
+test('the first prompt after a recent handoff asks the model to plan from it, once', async ($, on) => {
+  engine(on)
+  on('fs.stat', () => ({ value: { mtimeMs: NOW - 60_000, size: 100, isFile: true, isDirectory: false, isSymbolicLink: false } as never }))
+  await $.prompt.submit({ text: 'Continuando do handoff', wait: false, origin: { kind: 'composer' } })
+  await $.prompt.submit({ text: 'ok', wait: false, origin: { kind: 'composer' } })
+  expect(contexts[0]?.join(' ')).toMatch(/record its next steps as the plan/)
+  expect(contexts[1]?.join(' ') ?? '').not.toMatch(/record its next steps/)
 })

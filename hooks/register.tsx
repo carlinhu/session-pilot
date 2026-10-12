@@ -66,6 +66,9 @@ let runningTurn: string | undefined
 let callsThisTurn = 0
 let isNudgedThisTurn = false
 let nudgesThisSession = 0
+// Whether this session already pointed the model at a recent handoff to plan from.
+let isHandoffHinted = false
+const HANDOFF_HINT_MAX_AGE_MS = 3 * 86_400_000
 const NUDGE_AFTER_CALLS = 5
 const MAX_NUDGES = 2
 let seenModel: string | undefined
@@ -283,6 +286,29 @@ async function checkStale($: $T) {
   } catch {
     // No install record to compare with: a development folder, or a host that keeps none.
   }
+}
+
+/**
+ * Once per session, with no plan yet and a recent handoff in the project: ask
+ * the model to record the handoff's next steps as the plan, so a resumed
+ * session shows its plan from the first answer, whatever wrote the handoff.
+ */
+async function handoffPlanHint($: $T): Promise<string | undefined> {
+  if (isHandoffHinted) return undefined
+  isHandoffHinted = true
+  const plan = await read($, planA)
+  if (plan && plan.nodes.some(n => n.status !== 'done' && n.status !== 'skipped')) return undefined
+  const path = `${await $.session.root()}/.claude/handoffs/latest.md`
+  try {
+    const stat = await $.fs.stat(path)
+    if ((await now($)) - stat.mtimeMs > HANDOFF_HINT_MAX_AGE_MS) return undefined
+  } catch {
+    return undefined
+  }
+  return (
+    `session-pilot: a handoff from a previous session is in ${path}. If this work continues it, record its next steps as the plan ` +
+    `with ${PLAN_SET_TOOL} (what is done marked done) before answering, and keep it current with plan_update.`
+  )
 }
 
 /** A handoff from what the model already knows: no more work, no checks. */
@@ -756,11 +782,14 @@ export const register: Register = on => {
         limitTaskId: gate.kind === 'limit' ? undefined : c.limitTaskId,
       }))
     }
+    const context: string[] = []
     if (controls.notice && e.turnId === undefined) {
       await update($, controlsA, c => ({ ...c, notice: undefined }))
-      return next({ ...e, context: [...(e.context ?? []), controls.notice] })
+      context.push(controls.notice)
     }
-    return next(e)
+    const hint = await handoffPlanHint($)
+    if (hint) context.push(hint)
+    return context.length ? next({ ...e, context: [...(e.context ?? []), ...context] }) : next(e)
   })
 
   // One fixed paragraph in the system prompt so the main agent keeps the plan the dashboard shows.
