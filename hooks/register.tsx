@@ -10,7 +10,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, SessionRateLimit } from 'claude-code'
 
-import type { Activity, Controls, Gate, HandoffDraft, Plan, PlanNode, ResumeOffer, UsageSample, View } from '../types'
+import type { Activity, Controls, Derived, Gate, HandoffDraft, Plan, PlanNode, ResumeOffer, UsageSample, View } from '../types'
 import * as L from './logic'
 import type { Effort, HandoffInput, PlanSetInput, PlanUpdateInput, Recommendation } from './logic'
 import { band, pane, pickEls } from './ui'
@@ -22,6 +22,11 @@ const P = 'session-pilot'
 const PANE = 'session-pilot'
 const PREFIX = 'mcp__session-pilot__'
 const HANDOFF_WRITE = `${PREFIX}handoff_write`
+const PLAN_SET_TOOL = `${PREFIX}plan_set`
+const PLAN_GUIDE =
+  'The user follows your work on a session dashboard (session-pilot). For any task of three or more steps, call ' +
+  `${PREFIX}plan_set before starting, with milestones and tasks, and call ${PREFIX}plan_update when each task starts and ends. ` +
+  'Keep the plan current when the work changes. When a plan_update answer says to stop at a checkpoint, stop. Subagents never call these tools.'
 
 const CONTROLS: Controls = { pauseAtNext: false, focusUnit: false, handoffRequested: false, stopBlocks: 0 }
 const freshActivity = (t: number): Activity => ({
@@ -43,6 +48,7 @@ const handoffA = atom({ plugin: 'session-pilot', key: 'handoff' } as const, null
 const resumeA = atom({ plugin: 'session-pilot', key: 'resume' } as const, null)
 const viewA = atom({ plugin: 'session-pilot', key: 'view' } as const, { pane: 'plan', collapsed: [], isBandHidden: false } as View)
 const commandsA = atom({ plugin: 'session-pilot', key: 'commands' } as const, [])
+const derivedA = atom({ plugin: 'session-pilot', key: 'derived' } as const, L.derive([], freshActivity(0), 0) as Derived)
 
 /** Tools that only read: allowed while a gate holds the run. */
 const READ_ONLY = new Set(['Read', 'Grep', 'Glob', 'LS', 'TaskList', 'TaskGet', 'ToolSearch', 'TodoWrite', 'WebFetch', 'WebSearch'])
@@ -122,6 +128,18 @@ async function addSample($: $T, s: UsageSample) {
     const next = same ? [...list.slice(0, -1), { ...s, t: last.t }] : [...list, s]
     return next.slice(-600)
   })
+  await refreshDerived($)
+}
+
+/**
+ * Recomputes what the drawings read from the raw samples and activity, and
+ * writes it only when it changed: the raw values change on every tool call,
+ * and a redraw on each would rebuild the buttons under the person's click.
+ */
+async function refreshDerived($: $T) {
+  const [samples, activity, current, t] = await Promise.all([read($, samplesA), read($, activityA), read($, derivedA), now($)])
+  const next = L.derive(samples, activity, t)
+  if (JSON.stringify(next) !== JSON.stringify(current)) await update($, derivedA, () => next)
 }
 
 async function latestSample($: $T): Promise<UsageSample | undefined> {
@@ -159,25 +177,23 @@ async function engage($: $T, plan: Plan, finished: string[]): Promise<Gate | nul
 // ---------------------------------------------------------------- snapshot & actions
 
 async function snapshot($: $T): Promise<Snapshot> {
-  const [plan, gate, controls, samples, activity, handoff, resume, view, t] = await Promise.all([
+  // Reads only what changes visibly: never the raw samples or activity.
+  const [plan, gate, controls, derived, handoff, resume, view, t] = await Promise.all([
     read($, planA),
     read($, gateA),
     read($, controlsA),
-    read($, samplesA),
-    read($, activityA),
+    read($, derivedA),
     read($, handoffA),
     read($, resumeA),
     read($, viewA),
     now($),
   ])
-  const sample = L.latest(samples)
-  const five = L.forecastWindow(samples, 'five_hour', t)
-  const seven = L.forecastWindow(samples, 'seven_day', t)
-  const health = L.health(sample, activity)
+  const { sample, five, seven, health } = derived
+  const effort = controls.effortOverride ?? derived.effort
   const cur = L.current(plan)
-  const advice = L.modelAdvice(cur?.title, activity.model, controls.effortOverride ?? activity.effort, five.risk)
+  const advice = L.modelAdvice(cur?.title, derived.model, effort, five.risk)
   const stop = L.stopPoint(plan, five)
-  const recs = L.recommend({ sample, activity, five, seven, health, plan, gate, advice, stop, controls })
+  const recs = L.recommend({ sample, activity: L.activityOf(derived), five, seven, health, plan, gate, advice, stop, controls })
   return {
     now: t,
     plan,
@@ -196,8 +212,8 @@ async function snapshot($: $T): Promise<Snapshot> {
     advice,
     stop,
     recs,
-    model: activity.model,
-    effort: controls.effortOverride ?? activity.effort,
+    model: derived.model,
+    effort,
   }
 }
 
@@ -350,7 +366,7 @@ function actions($: $T): Actions {
       await $.store.set(await handoffKey($), { ...offer, isConsumed: true })
       await say(
         $,
-        `[session-pilot] Resume from the handoff in ${offer.path}. Read it, compare its "Observed state" with the working tree (git status), then continue with the first next step.`,
+        `[session-pilot] Resume from the handoff in ${offer.path}. Read it, compare its "Observed state" with the working tree (git status), record the plan with plan_set (keeping what is done), then continue with the first next step.`,
       )
     }),
     dismissResume: run(async () => {
@@ -602,6 +618,7 @@ export const register: Register = on => {
     }
     await update($, commandsA, () => commands.map(c => c.name).filter(n => n === 'model' || n === 'effort'))
     await update($, activityA, a => (a.startedAt === 0 ? { ...freshActivity(t), model } : { ...a, model: model ?? a.model }))
+    await refreshDerived($)
     seenModel = model
     if (usage) await addSample($, sampleFrom(usage, t))
     return next(e)
@@ -625,6 +642,7 @@ export const register: Register = on => {
       update($, activityA, a => ({ ...freshActivity(t), model: a.model, effort: a.effort })),
       update($, handoffA, () => null),
     ])
+    await refreshDerived($)
     const pending = (await $.store.get(await handoffKey($))) as (ResumeOffer & { isConsumed?: boolean }) | undefined
     if (pending && !pending.isConsumed && t - pending.createdAt < 7 * 86_400_000) {
       await update($, resumeA, () => ({ path: pending.path, createdAt: pending.createdAt, nextStep: pending.nextStep }))
@@ -636,6 +654,7 @@ export const register: Register = on => {
     runningTurn = e.turnId
     const turns = await $.session.turns()
     await update($, activityA, a => (a.turns === turns ? a : { ...a, turns }))
+    await refreshDerived($)
     return next(e)
   })
 
@@ -660,6 +679,7 @@ export const register: Register = on => {
       seenModel = e.model
       seenEffort = effort
       await update($, activityA, a => ({ ...a, model: e.model, effort }))
+      await refreshDerived($)
     }
     return yield* next(controls.effortOverride ? { ...e, effort: controls.effortOverride } : e)
   })
@@ -683,6 +703,14 @@ export const register: Register = on => {
     return next(e)
   })
 
+  // One fixed paragraph in the system prompt so the main agent keeps the plan the dashboard shows.
+  // Fixed text, so the prompt cache holds; added only where the plan tools are offered.
+  on('prompt.compose', async ($, e, next) => {
+    const result = await next(e)
+    if (!e.tools.includes(PLAN_SET_TOOL)) return result
+    return { ...result, sections: [...result.sections, { id: 'session-pilot:plan', text: PLAN_GUIDE, scope: 'session' as const }] }
+  })
+
   // Keep the plan through compaction, and count compactions.
   on('session.compact', async ($, e, next) => {
     if (e.agentId !== undefined) return next(e)
@@ -693,6 +721,7 @@ export const register: Register = on => {
     const result = await next(extra ? { ...e, instructions: [e.instructions, extra].filter(Boolean).join('\n\n') } : e)
     if (e.trigger !== 'precompute' && !('skip' in result && result.skip)) {
       await update($, activityA, a => ({ ...a, compactions: a.compactions + 1 }))
+      await refreshDerived($)
     }
     return result
   })
@@ -712,6 +741,7 @@ export const register: Register = on => {
   // ---- the plan tools
 
   on('tool.call', { tool: 'mcp__session-pilot__plan_set' }, async ($, e) => {
+    if (e.agentId !== undefined) return { deny: 'Only the main session records the plan; report your result to it instead.' }
     const input = e as unknown as PlanSetInput
     if (!input.title || !Array.isArray(input.milestones)) return { deny: 'plan_set needs title and milestones.' }
     const t = await now($)
@@ -769,6 +799,20 @@ export const register: Register = on => {
     const path = `${dir}/handoff-${stamp}.md`
     await $.fs.write(path, markdown)
     await $.fs.write(`${dir}/latest.md`, markdown)
+    // A handoff with no plan behind it seeds one from its next steps, so the next session opens with a plan.
+    if (!plan || plan.nodes.every(n => n.status === 'done' || n.status === 'skipped')) {
+      const seeded = L.buildPlan(
+        {
+          title: input.objective.length > 60 ? input.objective.slice(0, 59).trimEnd() + '…' : input.objective,
+          goal: input.objective,
+          milestones: [{ id: 'N', title: 'Next steps', items: input.next_steps.slice(0, 8).map(step => ({ title: step })) }],
+        },
+        t,
+        'tool',
+        null,
+      )
+      await savePlan($, seeded)
+    }
     const draft: HandoffDraft = { path, markdown, createdAt: t }
     await update($, handoffA, () => draft)
     await update($, controlsA, c => ({ ...c, handoffRequested: false, notice: undefined, stopBlocks: 0 }))
@@ -815,6 +859,7 @@ export const register: Register = on => {
       }
       return { ...a, edits, failingRepeats, tests, recentErrors: [...a.recentErrors, isError].slice(-40) }
     })
+    await refreshDerived($)
 
     const context: string[] = []
     if (!isError && (tool === 'TodoWrite' || tool === 'TaskCreate' || tool === 'TaskUpdate')) {

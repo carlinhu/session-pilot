@@ -4,6 +4,7 @@
 import type {
   Activity,
   Controls,
+  Derived,
   Gate,
   NodeKind,
   Plan,
@@ -871,4 +872,30 @@ export function basename(path: string): string {
 export function clip(text: string, width: number): string {
   if (width <= 1) return ''
   return text.length <= width ? text : text.slice(0, width - 1) + '…'
+}
+
+// ---------------------------------------------------------------- what the drawings read
+
+/** Usage and health as the drawings show them; equal inputs give equal output, so a caller writes only on change. */
+export function derive(samples: UsageSample[], activity: Activity, now: number): Derived {
+  const sample = latest(samples)
+  const signals = {
+    compactions: activity.compactions,
+    failingRepeats: Object.fromEntries(Object.entries(activity.failingRepeats).filter(([, n]) => n >= 3)),
+    edits: Object.fromEntries(Object.entries(activity.edits).filter(([, n]) => n >= 8)),
+  }
+  return {
+    sample,
+    five: forecastWindow(samples, 'five_hour', now),
+    seven: forecastWindow(samples, 'seven_day', now),
+    health: health(sample, activity),
+    model: activity.model,
+    effort: activity.effort,
+    signals,
+  }
+}
+
+/** The activity recommendations read, rebuilt from the signals a Derived keeps. */
+export function activityOf(d: Derived): Activity {
+  return { ...d.signals, tests: [], recentErrors: [], turns: 0, startedAt: 0, model: d.model, effort: d.effort }
 }

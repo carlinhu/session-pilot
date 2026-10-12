@@ -212,3 +212,27 @@ test('using a handoff in a new session never clears this one', async ($, on) => 
   expect(ran).not.toContain('clear')
   await ui.unmount()
 })
+
+test('the main agent is told to keep the plan; subagents may not set it', async ($, on) => {
+  engine(on)
+  on('prompt.compose', () => ({ sections: [{ id: 'intro', text: 'You are Claude.', scope: 'shared' as const }] }))
+  const composed = await $.prompt.compose({
+    model: 'claude-opus-5-5',
+    promptModel: 'claude-opus-5-5',
+    surfaces: ['desktop'],
+    tools: ['Read', 'mcp__session-pilot__plan_set'],
+    outputStyle: null,
+    traits: [],
+  })
+  expect(composed.sections.map(s => s.id)).toEqual(['intro', 'session-pilot:plan'])
+  const denied = await $.tool.call({ tool: 'mcp__session-pilot__plan_set', agentId: 'sub-1', title: 'x', milestones: [{ title: 'a' }] })
+  expect(denied.deny).toMatch(/Only the main session/)
+})
+
+test('a handoff with no plan seeds one from its next steps', async ($, on) => {
+  engine(on)
+  await $.tool.call({ tool: 'mcp__session-pilot__handoff_write', objective: 'Ship auth', next_steps: ['Write login form', 'Add tests'] })
+  const ui = await $.ui.mount({ plugin: 'session-pilot', surface: 'desktop', ...BAND })
+  expect(await ui.find({ key: 'plan' })).toBeDefined()
+  await ui.unmount()
+})

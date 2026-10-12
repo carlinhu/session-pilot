@@ -258,7 +258,6 @@ function planView(els: Els, Svg: SvgEl, s: Snapshot, a: Actions, W: number): Ren
         source={D.summaryCard({ ...stripInput(s), next: s.next, goal: plan.goal }, W)}
         alt={`${plan.title}: ${s.progress.done} of ${s.progress.total} tasks, ${s.progress.pct}%`}
         width={W}
-        isInteractive
       />
       {executionControls(els, Svg, s, a, W)}
       {section(Svg, 'sec-plan', 'Plan', W, plan.source === 'tool' ? undefined : `mirrored from ${plan.source === 'todo' ? 'TodoWrite' : 'Tasks'}`)}
@@ -285,7 +284,6 @@ function planView(els: Els, Svg: SvgEl, s: Snapshot, a: Actions, W: number): Ren
                   alt={`${n.id} ${n.title}: ${n.status}`}
                   width={rowW}
                   height={isHeader ? 34 : 28}
-                  isInteractive
                 />
                 <Button key={`n:${n.id}`} plain dimColor onPress={() => a.select(isSelected ? undefined : n.id)}>
                   {isSelected ? '✕' : '⋯'}
@@ -357,8 +355,8 @@ function healthView(els: Els, Svg: SvgEl, s: Snapshot, a: Actions, W: number): R
         height={82}
       />
       <Box flexDirection="row" gap={1} flexWrap="wrap">
-        <Svg key="m-5h" source={D.meterCard('5-hour window', s.five, s.now, meterW)} alt={`5-hour window ${s.five.used ?? 'n/a'}% used, risk ${s.five.risk}`} width={meterW} height={82} isInteractive />
-        <Svg key="m-wk" source={D.meterCard('Weekly quota', s.seven, s.now, meterW)} alt={`Weekly quota ${s.seven.used ?? 'n/a'}% used`} width={meterW} height={82} isInteractive />
+        <Svg key="m-5h" source={D.meterCard('5-hour window', s.five, s.now, meterW)} alt={`5-hour window ${s.five.used ?? 'n/a'}% used, risk ${s.five.risk}`} width={meterW} height={82} />
+        <Svg key="m-wk" source={D.meterCard('Weekly quota', s.seven, s.now, meterW)} alt={`Weekly quota ${s.seven.used ?? 'n/a'}% used`} width={meterW} height={82} />
       </Box>
       {ctx?.usd !== undefined && noteSvg(Svg, 'cost', `Session cost so far: $${ctx.usd.toFixed(2)} (official).`, W, 1)}
 

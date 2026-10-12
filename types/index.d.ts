@@ -96,6 +96,41 @@ export type Activity = {
   startedAt: number
 }
 
+export type Provenance = 'official' | 'estimate' | 'heuristic' | 'unavailable'
+
+export type DerivedForecast = {
+  kind: 'five_hour' | 'seven_day'
+  used?: number
+  resetsAt?: string
+  perHour?: number
+  basisMin?: number
+  etaMs?: number
+  risk: 'low' | 'medium' | 'high' | 'unknown'
+  provenance: Provenance
+}
+
+export type DerivedHealth = {
+  score: number
+  grade: 'good' | 'fair' | 'degraded' | 'poor'
+  factors: { label: string; delta: number; provenance: Provenance }[]
+}
+
+/**
+ * What the drawings read about usage and health, computed from the raw samples
+ * and activity and written only when it changes, so a tool call that changes
+ * nothing visible redraws nothing.
+ */
+export type Derived = {
+  sample?: UsageSample
+  five: DerivedForecast
+  seven: DerivedForecast
+  health: DerivedHealth
+  model?: string
+  effort?: string
+  /** The activity the recommendations look at: compactions, commands failing in a loop, files edited over and over. */
+  signals: Pick<Activity, 'compactions' | 'failingRepeats' | 'edits'>
+}
+
 export type HandoffDraft = { path: string; markdown: string; createdAt: number }
 
 export type ResumeOffer = { path: string; createdAt: number; nextStep?: string }
@@ -122,6 +157,7 @@ declare module 'claude-code' {
       resume: ResumeOffer | null
       view: View
       commands: string[]
+      derived: Derived
     }
   }
 }
