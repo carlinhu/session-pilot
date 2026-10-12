@@ -11,6 +11,9 @@ const RUN = { origin: { kind: 'composer' }, presentation: { isFullscreen: false,
 
 // What the fake surface shows: whether the pane is open.
 const surfacePane = { isOpen: false }
+let clock: ReturnType<typeof mock.clock>
+// Prompts the mod submitted.
+const submitted: string[] = []
 // Slash commands the mod ran through the engine.
 const ran: string[] = []
 
@@ -21,7 +24,7 @@ function engine(on: On) {
     ran.push(e.command)
     return { text: '' }
   })
-  mock.clock(on, { now: NOW })
+  clock = mock.clock(on, { now: NOW })
   mock.store(on)
   const files: Record<string, string> = {}
   on('session.root', () => ({ value: '/proj' }))
@@ -48,7 +51,11 @@ function engine(on: On) {
     value: surfacePane.isOpen ? [{ id: 'session-pilot', title: 'Session pilot', isShown: true, isFocused: false, isPlaced: true }] : [],
   }))
   on('ui.notify', () => ({ value: { isSent: false, reason: 'no-surface' } }))
-  on('prompt.submit', ($, e) => ({ text: e.text }))
+  submitted.length = 0
+  on('prompt.submit', ($, e) => {
+    submitted.push(e.text)
+    return { text: e.text }
+  })
   on('tool.call', { tool: 'Edit' }, () => ({ result: { ok: true } }))
   on('classic.Stop', () => ({}))
   on('session.measure', ($, e) => ({ changed: e.changed }))
@@ -247,4 +254,44 @@ test('with no plan, the model is reminded once after a few tool calls', async ($
   const nudged = contexts.filter(c => c?.some(t => /no plan is recorded/.test(t)))
   expect(nudged).toHaveLength(1)
   expect(contexts[4]?.join(' ')).toMatch(/plan_set/)
+})
+
+// What a session start needs beneath the mod.
+function sessionStartBottom(on: On) {
+  on('tool.register', ($, e) => ({ value: { tool: `mcp__session-pilot__${e.name}` } }))
+  on('command.register', ($, e) => ({ value: { command: e.name } }))
+  on('command.list', () => ({ value: [] }))
+  on('session.start', ($, e) => ({ cwd: e.cwd }))
+}
+
+test('continuing in a new session: one opened soon after starts from the handoff on its own', async ($, on) => {
+  engine(on)
+  sessionStartBottom(on)
+  await $.tool.call({ tool: 'mcp__session-pilot__handoff_write', objective: 'Ship auth', next_steps: ['Write login form'] })
+  const ui = await $.ui.mount({ plugin: 'session-pilot', surface: 'desktop', ...BAND })
+  await ui.press({ key: 'handoff-new' })
+  await ui.unmount()
+  expect(submitted).toHaveLength(0)
+
+  // The new session, ten minutes later.
+  await clock.advance(10 * 60_000)
+  await $.session.start({ cwd: '/proj', surface: 'desktop', isInteractive: true })
+  await clock.advance(2000)
+  expect(submitted.join(' ')).toMatch(/Continue the work from the handoff/)
+})
+
+test('a session opened long after the handoff only offers to resume', async ($, on) => {
+  engine(on)
+  sessionStartBottom(on)
+  await $.tool.call({ tool: 'mcp__session-pilot__handoff_write', objective: 'Ship auth', next_steps: ['Write login form'] })
+  const ui = await $.ui.mount({ plugin: 'session-pilot', surface: 'desktop', ...BAND })
+  await ui.press({ key: 'handoff-new' })
+  await ui.unmount()
+  await clock.advance(2 * 3_600_000)
+  await $.session.start({ cwd: '/proj', surface: 'desktop', isInteractive: true })
+  await clock.advance(2000)
+  expect(submitted).toHaveLength(0)
+  const band = await $.ui.mount({ plugin: 'session-pilot', surface: 'desktop', ...BAND })
+  expect(await band.find({ key: 'resume' })).toBeDefined()
+  await band.unmount()
 })

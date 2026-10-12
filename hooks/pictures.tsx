@@ -94,7 +94,7 @@ export function bandSvg(els: Els, Svg: SvgEl, s: Snapshot, a: Actions, cols: num
   if (s.handoff) {
     alert('row-handoff', 'handoff', 'Handoff ready', basename(s.handoff.path), [
       { key: 'handoff-review', label: 'Review', onPress: () => a.openPane('handoff') },
-      { key: 'handoff-new', label: 'Use in new session', primary: true, onPress: a.newSession },
+      { key: 'handoff-new', label: 'Continue in a new session', primary: true, onPress: a.newSession },
     ])
   } else if (s.controls.handoffRequested) {
     alert('row-wrap', 'wrap', 'Wrapping up', 'finishing the current unit, running checks, then writing the handoff', [])
@@ -431,7 +431,7 @@ function handoffView(els: Els, Svg: SvgEl, s: Snapshot, a: Actions, W: number): 
       {noteSvg(Svg, 'h-path', `${s.handoff.path} — edit the file if you like, then Reload.`, W, 2)}
       <Box flexDirection="row" gap={1} flexWrap="wrap">
         <Button key="h-new" variant="primary" onPress={a.newSession}>
-          Use in a new session
+          Continue in a new session
         </Button>
         <Button key="h-reload" onPress={a.reloadHandoff}>
           Reload

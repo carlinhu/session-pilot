@@ -187,7 +187,7 @@ function bandText(els: Els, s: Snapshot, a: Actions, cols: number, surface: Rend
         <Text color="success">✎</Text>
         <Text wrap="truncate-end">{clip(`Handoff ready: ${basename(s.handoff.path)}`, Math.max(16, cols - 44))}</Text>
         <Button key="handoff-review" onPress={() => a.openPane('handoff')}>Review</Button>
-        <Button key="handoff-new" variant="primary" onPress={a.newSession}>Use in new session</Button>
+        <Button key="handoff-new" variant="primary" onPress={a.newSession}>Continue in a new session</Button>
       </Box>,
     )
   }
@@ -573,7 +573,7 @@ function handoffView(els: Els, s: Snapshot, a: Actions, cols: number): RenderEle
     <Box flexDirection="column" gap={1}>
       <Text dimColor wrap="wrap">{`${s.handoff.path} · written ${fmtDuration(s.now - s.handoff.createdAt)} ago · edit the file freely, then Reload`}</Text>
       <Box flexDirection="row" gap={1} flexWrap="wrap">
-        <Button key="h-new" variant="primary" onPress={a.newSession}>Use in a new session</Button>
+        <Button key="h-new" variant="primary" onPress={a.newSession}>Continue in a new session</Button>
         <Button key="h-reload" onPress={a.reloadHandoff}>Reload</Button>
         <Button key="h-discard" plain dimColor onPress={a.discardHandoff}>discard</Button>
       </Box>

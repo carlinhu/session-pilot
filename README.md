@@ -73,7 +73,7 @@ Nothing is made up: without a reading, the pane shows "n/a".
 | Handoff now | The model writes the handoff from what it already knows: no more work, no checks. |
 | Short handoffs | The tool schema caps every list and line, and the generator cuts anything longer and leaves out empty sections: a one-minute read. |
 | The plan survives compaction | The `session.compact` hook adds the plan to the summary instructions. |
-| New session with handoff | *Use in new session* only queues the handoff: the session you are in is never cleared. The next session opened in the project offers *Resume*, which asks the model to read the handoff file. |
+| New session with handoff | *Continue in a new session* queues the handoff; the session you are in is never cleared. A session opened in the project within 30 minutes starts from the handoff on its own; one opened later offers *Resume*. (A mod cannot open a session itself; the app's own session tools are not offered to mods, and a task chip would start in a separate worktree without uncommitted changes.) |
 | Stop now | `$.turn.abort` (warns that it may leave the tree inconsistent). |
 
 ## Tools for the model

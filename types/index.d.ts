@@ -133,7 +133,13 @@ export type Derived = {
 
 export type HandoffDraft = { path: string; markdown: string; createdAt: number }
 
-export type ResumeOffer = { path: string; createdAt: number; nextStep?: string }
+export type ResumeOffer = {
+  path: string
+  createdAt: number
+  nextStep?: string
+  /** When the person chose to continue in a new session: one opened soon after starts on its own. */
+  queuedAt?: number
+}
 
 export type PaneView = 'plan' | 'health' | 'handoff'
 

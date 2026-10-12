@@ -306,15 +306,33 @@ async function applyModel($: $T, arg: string) {
   }
 }
 
+/** How long after "Continue in a new session" a session opened in the project starts from the handoff by itself. */
+const AUTO_RESUME_MS = 30 * 60_000
+
+function resumePrompt(offer: ResumeOffer): string {
+  return (
+    `[session-pilot] Continue the work from the handoff in ${offer.path}. Read it, compare its "Observed state" with the working tree (git status), ` +
+    `record the plan with plan_set (keeping what is done), then start with the first next step${offer.nextStep ? ` (${offer.nextStep})` : ''}.`
+  )
+}
+
 async function startNewSession($: $T) {
   const draft = await read($, handoffA)
   if (!draft) return
   const plan = await read($, planA)
   const nextStep = L.upNext(plan, 1)[0]
-  const offer: ResumeOffer = { path: draft.path, createdAt: draft.createdAt, nextStep: nextStep ? `${nextStep.id} ${nextStep.title}` : undefined }
-  // This session is never cleared: the next session opened in this project offers to resume.
+  const offer: ResumeOffer = {
+    path: draft.path,
+    createdAt: draft.createdAt,
+    nextStep: nextStep ? `${nextStep.id} ${nextStep.title}` : undefined,
+    queuedAt: await now($),
+  }
+  // This session is never cleared. A session opened in this project within AUTO_RESUME_MS starts from the handoff on its own.
   await $.store.set(await handoffKey($), { ...offer, isConsumed: false })
-  $.ui.toast('Handoff queued. Open a new session in this project: it offers to resume from it. This session stays as it is.', { timeoutMs: 12000 })
+  $.ui.toast(
+    'Handoff queued. Open a new session in this project (New session): within 30 minutes it starts from the handoff on its own. This session stays as it is.',
+    { timeoutMs: 15000 },
+  )
 }
 
 function actions($: $T): Actions {
@@ -373,10 +391,7 @@ function actions($: $T): Actions {
       if (!offer) return
       await update($, resumeA, () => null)
       await $.store.set(await handoffKey($), { ...offer, isConsumed: true })
-      await say(
-        $,
-        `[session-pilot] Resume from the handoff in ${offer.path}. Read it, compare its "Observed state" with the working tree (git status), record the plan with plan_set (keeping what is done), then continue with the first next step.`,
-      )
+      await say($, resumePrompt(offer))
     }),
     dismissResume: run(async () => {
       const offer = await read($, resumeA)
@@ -622,7 +637,14 @@ export const register: Register = on => {
       await update($, planA, () => plan)
     }
     const pending = offer as (ResumeOffer & { isConsumed?: boolean }) | undefined
-    if (pending && !pending.isConsumed && t - pending.createdAt < 7 * 86_400_000) {
+    if (pending && !pending.isConsumed && pending.queuedAt !== undefined && t - pending.queuedAt < AUTO_RESUME_MS) {
+      // The person asked for a new session from the handoff a moment ago: this is it, so start.
+      await $.store.set(await handoffKey($), { ...pending, isConsumed: true })
+      $.clock.after(1500, () => {
+        void say($, resumePrompt(pending))
+      })
+      $.ui.toast('session-pilot: continuing from the handoff.', { timeoutMs: 6000 })
+    } else if (pending && !pending.isConsumed && t - pending.createdAt < 7 * 86_400_000) {
       await update($, resumeA, () => ({ path: pending.path, createdAt: pending.createdAt, nextStep: pending.nextStep }))
     }
     await update($, commandsA, () => commands.map(c => c.name).filter(n => n === 'model' || n === 'effort'))
