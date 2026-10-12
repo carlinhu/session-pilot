@@ -5,7 +5,7 @@ Session dashboard and execution control for Claude Code (a function-hooks mod, C
 - **Band above the prompt**: the plan (segmented bar on desktop, text bar on the terminal), current task, what's next, session health, context, the 5-hour and weekly windows, and the main controls.
 - **Side pane** (`/pilot`, or click *Dashboard*): *Plan*, *Health* and *Handoff* tabs.
 - **Execution control** enforced through hooks, not only prompt instructions.
-- **Handoff** to a new session, reviewable, saved under `.claude/handoffs/`.
+- **Handoff** to a new session: reviewable, and never a file in your project.
 
 ## Install
 
@@ -33,7 +33,7 @@ To get a new version: `claude plugin marketplace update session-pilot`, then `cl
 
 Uninstall: `claude plugin uninstall session-pilot@session-pilot`
 
-The mod only writes `.claude/handoffs/*.md` in the project you work in (when you ask for a handoff) and its plan in Claude Code's local plugin store. Nothing is sent anywhere.
+The mod writes no files in your projects. Its plan and its one pending handoff per project live in Claude Code's local plugin store and clean themselves up: a handoff is deleted once you send it in a new session, when you dismiss it, or after 7 days unused; a plan when it is finished or untouched for 14 days. Nothing is sent anywhere.
 
 ## Architecture
 
@@ -70,10 +70,10 @@ Nothing is made up: without a reading, the pane shows "n/a".
 | Releasing the gate | *Continue* / *Continue to X* / *Handoff*, or your own next prompt. |
 | Finish the functional unit first | `plan_update.start` on another open milestone is refused. |
 | Finish current task → safe checkpoint → handoff | A wrap-up prompt (stop at a consistent point, quick checks only); `TaskCreate`, `Agent` and starting new tasks are denied; the `classic.Stop` hook sends the model back (at most twice) until `handoff_write` is called. |
-| Handoff now | The model writes the handoff from what it already knows: no more work, no checks. |
+| Handoff now | The model writes the handoff from what it already knows: no more work, no checks. Asked while Claude is idle, *Finish & handoff* does the same. A new prompt of yours cancels a pending request. |
 | Short handoffs | The tool schema caps every list and line, and the generator cuts anything longer and leaves out empty sections: a one-minute read. |
 | The plan survives compaction | The `session.compact` hook adds the plan to the summary instructions. |
-| New session with handoff | *Continue in a new session* queues the handoff; the session you are in is never cleared. A session opened in the project within 30 minutes starts from the handoff on its own; one opened later offers *Resume*. (A mod cannot open a session itself; the app's own session tools are not offered to mods, and a task chip would start in a separate worktree without uncommitted changes.) |
+| New session with handoff | *Continue in a new session* queues the handoff; the session you are in is never cleared. A session opened in the project within 30 minutes finds the handoff in its input, to review and send; one opened later offers *Resume*, which fills the input the same way. Sending it deletes the stored copy. (A mod cannot open a session itself; the app's own session tools are not offered to mods, and a task chip would start in a separate worktree without uncommitted changes.) |
 | Stop now | `$.turn.abort` (warns that it may leave the tree inconsistent). |
 
 ## Tools for the model

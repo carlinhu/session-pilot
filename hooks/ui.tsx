@@ -60,7 +60,6 @@ export type Actions = {
   dismissGate: () => void
   newSession: () => void
   quickHandoff: () => void
-  reloadHandoff: () => void
   discardHandoff: () => void
   resume: () => void
   dismissResume: () => void

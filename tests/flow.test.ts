@@ -16,6 +16,8 @@ let clock: ReturnType<typeof mock.clock>
 const submitted: string[] = []
 // The context each submitted prompt carried.
 const contexts: (readonly string[] | undefined)[] = []
+// What the mod put in the prompt box.
+const filled: string[] = []
 // Slash commands the mod ran through the engine.
 const ran: string[] = []
 
@@ -55,6 +57,11 @@ function engine(on: On) {
   on('ui.notify', () => ({ value: { isSent: false, reason: 'no-surface' } }))
   submitted.length = 0
   contexts.length = 0
+  filled.length = 0
+  on('prompt.fill', ($, e) => {
+    filled.push(e.text)
+    return { isFilled: true }
+  })
   on('prompt.submit', ($, e) => {
     submitted.push(e.text)
     contexts.push(e.context)
@@ -140,11 +147,14 @@ test('wrap-up for handoff: refuses new work, sends the model back at Stop, write
     next_steps: ['Finish M1.1'],
     tests: [{ command: 'npm test', result: 'pass' }],
   })
-  expect(String(written.result)).toMatch(/Handoff saved to \/proj\/\.claude\/handoffs\/handoff-/)
-  // The engine spells the path the platform's way.
-  const latest = Object.entries(files).find(([path]) => /[\\/]\.claude[\\/]handoffs[\\/]latest\.md$/.test(path))?.[1]
-  expect(latest).toContain('## Objective\nShip auth')
-  expect(latest).toContain('Not a git repository, or git unavailable.')
+  expect(String(written.result)).toMatch(/^Handoff saved\./)
+  // No file in the project: the handoff lives in the mod's store and shows in the pane.
+  expect(Object.keys(files)).toHaveLength(0)
+  const pane = await $.ui.mount({ plugin: 'session-pilot', surface: 'desktop', component: 'Pane', requestId: 'session-pilot', props: { title: 'Session pilot', isFocused: true, bodyColumns: 70, placement: 'dock', scroll: { offset: 0, bodyRows: 60 }, view: {} } })
+  const doc = String((await pane.find({ type: 'Markdown' }))?.props.text)
+  expect(doc).toContain('## Objective\nShip auth')
+  expect(doc).toContain('Not a git repository, or git unavailable.')
+  await pane.unmount()
 
   const after = await $.classic.Stop({ stop_hook_active: false })
   expect(after.block).toBeUndefined()
@@ -268,7 +278,7 @@ function sessionStartBottom(on: On) {
   on('session.start', ($, e) => ({ cwd: e.cwd }))
 }
 
-test('continuing in a new session: one opened soon after starts from the handoff on its own', async ($, on) => {
+test('continuing in a new session: one opened soon after has the handoff in its input; sending it deletes the copy', async ($, on) => {
   engine(on)
   sessionStartBottom(on)
   await $.tool.call({ tool: 'mcp__session-pilot__handoff_write', objective: 'Ship auth', next_steps: ['Write login form'] })
@@ -281,7 +291,16 @@ test('continuing in a new session: one opened soon after starts from the handoff
   await clock.advance(10 * 60_000)
   await $.session.start({ cwd: '/proj', surface: 'desktop', isInteractive: true })
   await clock.advance(2000)
-  expect(submitted.join(' ')).toMatch(/Continue the work from the handoff/)
+  expect(submitted).toHaveLength(0)
+  expect(filled).toHaveLength(1)
+  expect(filled[0]).toMatch(/^\[session-pilot handoff\] Continue the work from this handoff/)
+  expect(filled[0]).toContain('## Objective')
+
+  // Sent: the copy is gone, so another session opened now gets nothing.
+  await $.prompt.submit({ text: filled[0]!, wait: false, origin: { kind: 'composer' } })
+  await $.session.start({ cwd: '/proj', surface: 'desktop', isInteractive: true })
+  await clock.advance(2000)
+  expect(filled).toHaveLength(1)
 })
 
 test('a session opened long after the handoff only offers to resume', async ($, on) => {
@@ -309,11 +328,15 @@ test('handoff while idle writes it at once, with no "finish your work" round', a
   expect(submitted.join(' ')).not.toMatch(/nearest consistent point/)
 })
 
-test('the first prompt after a recent handoff asks the model to plan from it, once', async ($, on) => {
+test('a new prompt instead of the handoff cancels the pending request', async ($, on) => {
   engine(on)
-  on('fs.stat', () => ({ value: { mtimeMs: NOW - 60_000, size: 100, isFile: true, isDirectory: false, isSymbolicLink: false } as never }))
-  await $.prompt.submit({ text: 'Continuando do handoff', wait: false, origin: { kind: 'composer' } })
-  await $.prompt.submit({ text: 'ok', wait: false, origin: { kind: 'composer' } })
-  expect(contexts[0]?.join(' ')).toMatch(/record its next steps as the plan/)
-  expect(contexts[1]?.join(' ') ?? '').not.toMatch(/record its next steps/)
+  await plan($)
+  const ui = await $.ui.mount({ plugin: 'session-pilot', surface: 'desktop', ...BAND })
+  await ui.press({ key: 'finish' })
+  await ui.unmount()
+  await $.prompt.submit({ text: 'actually, a question first', wait: false, origin: { kind: 'composer' } })
+  const stop = await $.classic.Stop({ stop_hook_active: false })
+  expect(stop.block).toBeUndefined()
+  const start = await update($, { start: 'M1.1' })
+  expect(String(start.result)).not.toMatch(/Refused/)
 })

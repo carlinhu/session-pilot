@@ -5,7 +5,7 @@
 import type { RenderElement } from 'claude-code'
 
 import type { PlanNode, View } from '../types'
-import { GLYPH, basename, childrenOf, depth, fmtDuration, fmtUntil, leaves, milestoneOf, nodeProgress, ordered, round1 } from './logic'
+import { GLYPH, childrenOf, depth, fmtDuration, fmtUntil, leaves, milestoneOf, nodeProgress, ordered, round1 } from './logic'
 import type { Provenance, Recommendation, WindowForecast } from './logic'
 import type { Actions, Els, Snapshot } from './ui'
 
@@ -141,7 +141,7 @@ export function bandTerm(els: Els, s: Snapshot, a: Actions, cols: number): Rende
     alert('row-gate', '⏸ REVIEW', 'warning', s.gate.reason, buttons)
   }
   if (s.handoff) {
-    alert('row-handoff', '✎ HANDOFF', 'success', `ready: ${basename(s.handoff.path)}`, [
+    alert('row-handoff', '✎ HANDOFF', 'success', `ready · written ${fmtDuration(s.now - s.handoff.createdAt)} ago`, [
       { key: 'handoff-review', label: 'Review', onPress: () => a.openPane('handoff') },
       { key: 'handoff-new', label: 'Continue in a new session', primary: true, onPress: a.newSession },
     ])
@@ -590,12 +590,11 @@ function handoffView(els: Els, s: Snapshot, a: Actions, W: number): RenderElemen
   return (
     <Box flexDirection="column">
       <Box borderStyle="round" borderColor="success" paddingX={1} marginTop={1} flexDirection="column">
-        {texts(els, [chip('✎ READY', 'success'), { text: ` ${basename(s.handoff.path)}`, bold: true }, { text: ` · ${fmtDuration(s.now - s.handoff.createdAt)} ago`, dim: true }])}
-        <Text dimColor wrap="truncate-middle">{clip(s.handoff.path, W * 2)}</Text>
+        {texts(els, [chip('✎ READY', 'success'), { text: ` written ${fmtDuration(s.now - s.handoff.createdAt)} ago`, dim: true }])}
+        <Text dimColor wrap="wrap">Kept by session-pilot, not as a file. A new session gets it in its input to review and send; it is deleted once sent, or after 7 days.</Text>
       </Box>
       <Box flexDirection="row" gap={1} flexWrap="wrap" marginTop={1}>
         <Button key="h-new" variant="primary" onPress={a.newSession}>Continue in a new session</Button>
-        <Button key="h-reload" onPress={a.reloadHandoff}>Reload</Button>
         <Button key="h-discard" plain dimColor onPress={a.discardHandoff}>Discard</Button>
       </Box>
       <Markdown text={s.handoff.markdown} />

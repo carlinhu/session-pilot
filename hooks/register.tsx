@@ -10,7 +10,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, SessionRateLimit } from 'claude-code'
 
-import type { Activity, Controls, Derived, Gate, HandoffDraft, Plan, PlanNode, ResumeOffer, UsageSample, View } from '../types'
+import type { Activity, Controls, Derived, Gate, HandoffBackup, HandoffDraft, Plan, PlanNode, UsageSample, View } from '../types'
 import * as L from './logic'
 import type { Effort, HandoffInput, PlanSetInput, PlanUpdateInput, Recommendation } from './logic'
 import { band, pane, pickEls } from './ui'
@@ -66,9 +66,6 @@ let runningTurn: string | undefined
 let callsThisTurn = 0
 let isNudgedThisTurn = false
 let nudgesThisSession = 0
-// Whether this session already pointed the model at a recent handoff to plan from.
-let isHandoffHinted = false
-const HANDOFF_HINT_MAX_AGE_MS = 3 * 86_400_000
 const NUDGE_AFTER_CALLS = 5
 const MAX_NUDGES = 2
 let seenModel: string | undefined
@@ -288,27 +285,64 @@ async function checkStale($: $T) {
   }
 }
 
-/**
- * Once per session, with no plan yet and a recent handoff in the project: ask
- * the model to record the handoff's next steps as the plan, so a resumed
- * session shows its plan from the first answer, whatever wrote the handoff.
- */
-async function handoffPlanHint($: $T): Promise<string | undefined> {
-  if (isHandoffHinted) return undefined
-  isHandoffHinted = true
-  const plan = await read($, planA)
-  if (plan && plan.nodes.some(n => n.status !== 'done' && n.status !== 'skipped')) return undefined
-  const path = `${await $.session.root()}/.claude/handoffs/latest.md`
-  try {
-    const stat = await $.fs.stat(path)
-    if ((await now($)) - stat.mtimeMs > HANDOFF_HINT_MAX_AGE_MS) return undefined
-  } catch {
-    return undefined
-  }
+// ---------------------------------------------------------------- the handoff backup
+//
+// A handoff is never a file in the project: the mod has no way to delete
+// files, so anything it wrote there would stay. The one handoff of a project
+// lives in the mod's store and leaves it when the person sends it, dismisses
+// it, or after HANDOFF_TTL_MS unused.
+
+const HANDOFF_MARKER = '[session-pilot handoff]'
+const HANDOFF_TTL_MS = 7 * 86_400_000
+const PLAN_TTL_MS = 14 * 86_400_000
+/** How long after "Continue in a new session" a session opened in the project fills its input with the handoff. */
+const AUTO_RESUME_MS = 30 * 60_000
+
+async function readBackup($: $T): Promise<HandoffBackup | undefined> {
+  const value = (await $.store.get(await handoffKey($))) as Partial<HandoffBackup> | undefined
+  return value && typeof value.markdown === 'string' && typeof value.createdAt === 'number' ? (value as HandoffBackup) : undefined
+}
+
+async function dropBackup($: $T) {
+  await $.store.delete(await handoffKey($))
+  await update($, resumeA, () => null)
+}
+
+/** What the new session's input is filled with: the handoff itself, under a marker the mod knows it by when it is sent. */
+function resumeText(b: HandoffBackup): string {
   return (
-    `session-pilot: a handoff from a previous session is in ${path}. If this work continues it, record its next steps as the plan ` +
-    `with ${PLAN_SET_TOOL} (what is done marked done) before answering, and keep it current with plan_update.`
+    `${HANDOFF_MARKER} Continue the work from this handoff. Check its "Observed state" against the working tree, record its next steps ` +
+    `as the plan with plan_set (what is done marked done), then start with the first one.\n\n${b.markdown}`
   )
+}
+
+/** Fills the input once the composer is there: at a session's start it may not be mounted yet. */
+function fillInput($: $T, text: string, attempt = 0) {
+  $.clock.after(attempt === 0 ? 1200 : 1500, () => {
+    void $.prompt
+      .fill({ text })
+      .then(r => {
+        if (!r.isFilled && r.refusal === 'no_composer' && attempt < 6) fillInput($, text, attempt + 1)
+        else if (r.isFilled) $.ui.toast('session-pilot: the handoff is in the input. Review it and press Enter to continue.', { timeoutMs: 8000 })
+      })
+      .catch(() => undefined)
+  })
+}
+
+/** Plans finished or untouched for PLAN_TTL_MS and handoffs past HANDOFF_TTL_MS (or in an old shape) leave the store. */
+async function pruneStore($: $T) {
+  const t = await now($)
+  for (const key of await $.store.keys()) {
+    const value = (await $.store.get(key)) as Record<string, unknown> | undefined
+    if (key.startsWith('plan:')) {
+      const plan = value as Plan | undefined
+      const isFinished = !plan?.nodes?.length || plan.nodes.every(n => n.status === 'done' || n.status === 'skipped')
+      if (isFinished || t - (plan?.updatedAt ?? 0) > PLAN_TTL_MS) await $.store.delete(key)
+    } else if (key.startsWith('handoff:')) {
+      const isCurrent = typeof value?.markdown === 'string' && typeof value?.createdAt === 'number'
+      if (!isCurrent || t - (value.createdAt as number) > HANDOFF_TTL_MS) await $.store.delete(key)
+    }
+  }
 }
 
 /** A handoff from what the model already knows: no more work, no checks. */
@@ -355,31 +389,13 @@ async function applyModel($: $T, arg: string) {
   }
 }
 
-/** How long after "Continue in a new session" a session opened in the project starts from the handoff by itself. */
-const AUTO_RESUME_MS = 30 * 60_000
-
-function resumePrompt(offer: ResumeOffer): string {
-  return (
-    `[session-pilot] Continue the work from the handoff in ${offer.path}. Read it, compare its "Observed state" with the working tree (git status), ` +
-    `record the plan with plan_set (keeping what is done), then start with the first next step${offer.nextStep ? ` (${offer.nextStep})` : ''}.`
-  )
-}
-
 async function startNewSession($: $T) {
-  const draft = await read($, handoffA)
-  if (!draft) return
-  const plan = await read($, planA)
-  const nextStep = L.upNext(plan, 1)[0]
-  const offer: ResumeOffer = {
-    path: draft.path,
-    createdAt: draft.createdAt,
-    nextStep: nextStep ? `${nextStep.id} ${nextStep.title}` : undefined,
-    queuedAt: await now($),
-  }
-  // This session is never cleared. A session opened in this project within AUTO_RESUME_MS starts from the handoff on its own.
-  await $.store.set(await handoffKey($), { ...offer, isConsumed: false })
+  const backup = await readBackup($)
+  if (!backup) return void $.ui.toast('session-pilot: no handoff to continue from.')
+  // This session is never cleared. A session opened in this project within AUTO_RESUME_MS finds the handoff in its input.
+  await $.store.set(await handoffKey($), { ...backup, queuedAt: await now($) })
   $.ui.toast(
-    'Handoff queued. Open a new session in this project (New session): within 30 minutes it starts from the handoff on its own. This session stays as it is.',
+    'Handoff queued. Open a new session in this project (New session): the handoff will be in its input, ready to send. This session stays as it is.',
     { timeoutMs: 15000 },
   )
 }
@@ -425,28 +441,18 @@ function actions($: $T): Actions {
     continueRun: limitId => run(() => continueRun($, limitId))(),
     dismissGate: run(() => update($, gateA, () => null)),
     newSession: run(() => startNewSession($)),
-    reloadHandoff: run(async () => {
-      const draft = await read($, handoffA)
-      if (!draft) return
-      const markdown = await $.fs.read(draft.path)
-      await update($, handoffA, d => (d ? { ...d, markdown } : d))
-    }),
     discardHandoff: run(async () => {
       await update($, handoffA, () => null)
+      await dropBackup($)
       await update($, gateA, g => (g?.kind === 'pause' && g.reason.startsWith('Handoff') ? null : g))
     }),
     resume: run(async () => {
-      const offer = await read($, resumeA)
-      if (!offer) return
+      const backup = await readBackup($)
       await update($, resumeA, () => null)
-      await $.store.set(await handoffKey($), { ...offer, isConsumed: true })
-      await say($, resumePrompt(offer))
+      // The backup stays until the filled prompt is sent.
+      if (backup) fillInput($, resumeText(backup))
     }),
-    dismissResume: run(async () => {
-      const offer = await read($, resumeA)
-      await update($, resumeA, () => null)
-      if (offer) await $.store.set(await handoffKey($), { ...offer, isConsumed: true })
-    }),
+    dismissResume: run(() => dropBackup($)),
     act: (rec: Recommendation) =>
       run(async () => {
         switch (rec.action) {
@@ -674,9 +680,10 @@ export const register: Register = on => {
       $.command.register({ name: 'pilot-checkpoint', description: 'Toggle a review checkpoint on a plan item', argumentHint: '<id>', immediate: true }),
     ])
     const t = await now($)
-    const [stored, offer, commands, usage, model] = await Promise.all([
+    await pruneStore($).catch(() => undefined)
+    const [stored, backup, commands, usage, model] = await Promise.all([
       $.store.get(await planKey($)),
-      $.store.get(await handoffKey($)),
+      readBackup($),
       $.command.list().catch(() => []),
       $.session.usage().catch(() => undefined),
       $.session.model().catch(() => undefined),
@@ -685,16 +692,11 @@ export const register: Register = on => {
     if (plan && (await read($, planA)) === null && plan.nodes.some(n => n.status !== 'done' && n.status !== 'skipped')) {
       await update($, planA, () => plan)
     }
-    const pending = offer as (ResumeOffer & { isConsumed?: boolean }) | undefined
-    if (pending && !pending.isConsumed && pending.queuedAt !== undefined && t - pending.queuedAt < AUTO_RESUME_MS) {
-      // The person asked for a new session from the handoff a moment ago: this is it, so start.
-      await $.store.set(await handoffKey($), { ...pending, isConsumed: true })
-      $.clock.after(1500, () => {
-        void say($, resumePrompt(pending))
-      })
-      $.ui.toast('session-pilot: continuing from the handoff.', { timeoutMs: 6000 })
-    } else if (pending && !pending.isConsumed && t - pending.createdAt < 7 * 86_400_000) {
-      await update($, resumeA, () => ({ path: pending.path, createdAt: pending.createdAt, nextStep: pending.nextStep }))
+    if (backup && backup.queuedAt !== undefined && t - backup.queuedAt < AUTO_RESUME_MS) {
+      // The person asked for a new session from the handoff a moment ago: this is it. The text waits in the input; sending it drops the backup.
+      fillInput($, resumeText(backup))
+    } else if (backup) {
+      await update($, resumeA, () => ({ createdAt: backup.createdAt, nextStep: backup.nextStep }))
     }
     await update($, commandsA, () => commands.map(c => c.name).filter(n => n === 'model' || n === 'effort'))
     await update($, activityA, a => (a.startedAt === 0 ? { ...freshActivity(t), model } : { ...a, model: model ?? a.model }))
@@ -727,10 +729,8 @@ export const register: Register = on => {
       update($, handoffA, () => null),
     ])
     await refreshDerived($)
-    const pending = (await $.store.get(await handoffKey($))) as (ResumeOffer & { isConsumed?: boolean }) | undefined
-    if (pending && !pending.isConsumed && t - pending.createdAt < 7 * 86_400_000) {
-      await update($, resumeA, () => ({ path: pending.path, createdAt: pending.createdAt, nextStep: pending.nextStep }))
-    }
+    const backup = await readBackup($)
+    if (backup) await update($, resumeA, () => ({ createdAt: backup.createdAt, nextStep: backup.nextStep }))
     return result
   })
 
@@ -783,12 +783,17 @@ export const register: Register = on => {
       }))
     }
     const context: string[] = []
-    if (controls.notice && e.turnId === undefined) {
+    if (e.text.includes(HANDOFF_MARKER)) {
+      // The person sent the handoff: it has reached the session, so the backup goes.
+      await dropBackup($)
+    } else if (controls.handoffRequested) {
+      // A new prompt instead of the handoff: the person moved on, so stop asking for it.
+      await update($, controlsA, c => ({ ...c, handoffRequested: false, stopBlocks: 0, notice: undefined }))
+    }
+    if (controls.notice && e.turnId === undefined && !controls.handoffRequested) {
       await update($, controlsA, c => ({ ...c, notice: undefined }))
       context.push(controls.notice)
     }
-    const hint = await handoffPlanHint($)
-    if (hint) context.push(hint)
     return context.length ? next({ ...e, context: [...(e.context ?? []), ...context] }) : next(e)
   })
 
@@ -883,12 +888,8 @@ export const register: Register = on => {
     ])
     const git = await gitState($, root)
     const markdown = L.handoffMarkdown(input, { now: t, root, git, activity, plan, sample, model })
-    const stamp = new Date(t).toISOString().slice(0, 16).replace(/[-:T]/g, '')
-    const dir = `${root}/.claude/handoffs`
-    const path = `${dir}/handoff-${stamp}.md`
-    await $.fs.write(path, markdown)
-    await $.fs.write(`${dir}/latest.md`, markdown)
     // A handoff with no plan behind it seeds one from its next steps, so the next session opens with a plan.
+    let nextPlan = plan
     if (!plan || plan.nodes.every(n => n.status === 'done' || n.status === 'skipped')) {
       const seeded = L.buildPlan(
         {
@@ -901,8 +902,13 @@ export const register: Register = on => {
         null,
       )
       await savePlan($, seeded)
+      nextPlan = seeded
     }
-    const draft: HandoffDraft = { path, markdown, createdAt: t }
+    // Kept in the mod's store, never as a file in the project: it leaves the store when sent, dismissed or expired.
+    const next = L.upNext(nextPlan, 1)[0]
+    const backup: HandoffBackup = { markdown, createdAt: t, nextStep: next ? `${next.id} ${next.title}` : undefined }
+    await $.store.set(await handoffKey($), backup)
+    const draft: HandoffDraft = { markdown, createdAt: t }
     await update($, handoffA, () => draft)
     await update($, controlsA, c => ({ ...c, handoffRequested: false, notice: undefined, stopBlocks: 0 }))
     await update($, gateA, () => ({ kind: 'pause', reason: 'Handoff written: review it, then start a new session', at: t }))
@@ -910,7 +916,7 @@ export const register: Register = on => {
     void $.ui.open({ id: PANE, title: 'Session pilot', columns: 72 }).catch(() => undefined)
     void $.ui.notify('Handoff ready for review.', { title: 'session-pilot' }).catch(() => undefined)
     return {
-      result: `Handoff saved to ${path} (also .claude/handoffs/latest.md). Stop now: start no more work. Tell the user in one or two sentences that the handoff is ready for review in the session-pilot pane.`,
+      result: 'Handoff saved. Stop now: start no more work. Tell the user in one or two sentences that the handoff is ready for review in the session-pilot pane.',
     }
   })
 

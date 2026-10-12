@@ -5,7 +5,7 @@ import type { RenderElement } from 'claude-code'
 
 import type { View } from '../types'
 import * as D from './draw'
-import { basename, childrenOf, depth, fmtDuration, nodeProgress, ordered } from './logic'
+import { childrenOf, depth, fmtDuration, nodeProgress, ordered } from './logic'
 import type { Recommendation } from './logic'
 import type { Actions, Els, Snapshot } from './ui'
 
@@ -95,7 +95,7 @@ export function bandSvg(els: Els, Svg: SvgEl, s: Snapshot, a: Actions, cols: num
     alert('row-gate', 'pause', 'Waiting for your review', s.gate.reason, buttons)
   }
   if (s.handoff) {
-    alert('row-handoff', 'handoff', 'Handoff ready', basename(s.handoff.path), [
+    alert('row-handoff', 'handoff', 'Handoff ready', `written ${fmtDuration(s.now - s.handoff.createdAt)} ago`, [
       { key: 'handoff-review', label: 'Review', onPress: () => a.openPane('handoff') },
       { key: 'handoff-new', label: 'Continue in a new session', primary: true, onPress: a.newSession },
     ])
@@ -426,18 +426,15 @@ function handoffView(els: Els, Svg: SvgEl, s: Snapshot, a: Actions, W: number): 
     <Box flexDirection="column" gap={1}>
       <Svg
         key="h-ready"
-        source={D.banner('handoff', 'Handoff ready', `${basename(s.handoff.path)} · ${fmtDuration(s.now - s.handoff.createdAt)} ago`, W)}
+        source={D.banner('handoff', 'Handoff ready', `written ${fmtDuration(s.now - s.handoff.createdAt)} ago`, W)}
         alt="Handoff ready"
         width={W}
         height={30}
       />
-      {noteSvg(Svg, 'h-path', `${s.handoff.path} — edit the file if you like, then Reload.`, W, 2)}
+      {noteSvg(Svg, 'h-where', 'Kept by session-pilot, not as a file in your project. Continue in a new session: the text waits in its input for you to review and send. It is deleted once sent, or after 7 days unused.', W, 3)}
       <Box flexDirection="row" gap={1} flexWrap="wrap">
         <Button key="h-new" variant="primary" onPress={a.newSession}>
           Continue in a new session
-        </Button>
-        <Button key="h-reload" onPress={a.reloadHandoff}>
-          Reload
         </Button>
         <Button key="h-discard" plain dimColor onPress={a.discardHandoff}>
           Discard
