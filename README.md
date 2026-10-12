@@ -9,15 +9,18 @@ Session dashboard and execution control for Claude Code (a function-hooks mod, C
 
 ## Install
 
-Requires Claude Code **2.1.295 or newer** (the mods API is early access).
+Requires Claude Code **2.1.295 or newer** (the mods API is early access). Check with `claude --version`; update with `claude update`. On an older version the install fails with "couldn't find plugin" or "unknown option '--marketplace'", and the mod would not run anyway.
 
-From GitHub, at the prompt of a terminal session:
+From GitHub, in a terminal:
 
+```bash
+claude plugin marketplace add carlinhu/session-pilot
+claude plugin install session-pilot@session-pilot
 ```
-/plugin install session-pilot --marketplace carlinhu/session-pilot
-```
 
-Answer `y` to add the marketplace, then pick a scope (user = every session).
+Or in one line, at the prompt of a terminal session: `/plugin install session-pilot --marketplace carlinhu/session-pilot` (answer `y` to add the marketplace, then pick a scope; user = every session).
+
+Then open a new session, or run `/reload-plugins` in an open one.
 
 From a folder (a clone, or an unzipped copy):
 
