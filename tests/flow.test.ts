@@ -236,3 +236,15 @@ test('a handoff with no plan seeds one from its next steps', async ($, on) => {
   expect(await ui.find({ key: 'plan' })).toBeDefined()
   await ui.unmount()
 })
+
+test('with no plan, the model is reminded once after a few tool calls', async ($, on) => {
+  engine(on)
+  on('tool.call', { tool: 'Read' }, () => ({ result: { ok: true } }))
+  on('turn.start', ($, e) => ({ turnId: e.turnId }))
+  await $.turn.start({ text: 'refactor the cache', turnId: 't1' })
+  const contexts: (readonly string[] | undefined)[] = []
+  for (let i = 0; i < 7; i++) contexts.push((await $.tool.call({ tool: 'Read', file_path: 'a.ts' })).context)
+  const nudged = contexts.filter(c => c?.some(t => /no plan is recorded/.test(t)))
+  expect(nudged).toHaveLength(1)
+  expect(contexts[4]?.join(' ')).toMatch(/plan_set/)
+})

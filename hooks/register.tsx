@@ -23,6 +23,9 @@ const PANE = 'session-pilot'
 const PREFIX = 'mcp__session-pilot__'
 const HANDOFF_WRITE = `${PREFIX}handoff_write`
 const PLAN_SET_TOOL = `${PREFIX}plan_set`
+const PLAN_NUDGE =
+  `session-pilot: work is under way and no plan is recorded. Call ${PREFIX}plan_set now with the work as you understand it ` +
+  '(milestones and tasks, what is already done marked done), then keep it current with plan_update. Then carry on.'
 const PLAN_GUIDE =
   'The user follows your work on a session dashboard (session-pilot). For any task of three or more steps, call ' +
   `${PREFIX}plan_set before starting, with milestones and tasks, and call ${PREFIX}plan_update when each task starts and ends. ` +
@@ -58,6 +61,12 @@ const PERSON = new Set(['composer', 'bridge', 'sdk'])
 // The running main-loop turn. A module variable: a reload mid-turn only loses
 // "stop now" and the mid-turn notice route until the next turn starts.
 let runningTurn: string | undefined
+// The plan reminder: main-loop tool calls this turn, and reminders sent this session.
+let callsThisTurn = 0
+let isNudgedThisTurn = false
+let nudgesThisSession = 0
+const NUDGE_AFTER_CALLS = 5
+const MAX_NUDGES = 2
 let seenModel: string | undefined
 let seenEffort: string | undefined
 
@@ -652,6 +661,8 @@ export const register: Register = on => {
 
   on('turn.start', async ($, e, next) => {
     runningTurn = e.turnId
+    callsThisTurn = 0
+    isNudgedThisTurn = false
     const turns = await $.session.turns()
     await update($, activityA, a => (a.turns === turns ? a : { ...a, turns }))
     await refreshDerived($)
@@ -870,6 +881,18 @@ export const register: Register = on => {
         if (after) {
           const engaged = await engage($, after, newlyDone(before, after))
           if (engaged) context.push(gateNotice(engaged))
+        }
+      }
+    }
+    // Work under way with no plan: remind the model once, so the dashboard fills without the person asking.
+    if (e.agentId === undefined) {
+      callsThisTurn += 1
+      if (callsThisTurn >= NUDGE_AFTER_CALLS && !isNudgedThisTurn && nudgesThisSession < MAX_NUDGES) {
+        const plan = await read($, planA)
+        if (!plan || plan.nodes.every(n => n.status === 'done' || n.status === 'skipped')) {
+          isNudgedThisTurn = true
+          nudgesThisSession += 1
+          context.push(PLAN_NUDGE)
         }
       }
     }
