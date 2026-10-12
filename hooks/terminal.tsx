@@ -196,30 +196,47 @@ export function bandTerm(els: Els, s: Snapshot, a: Actions, cols: number): Rende
       : []),
   ]
   const top = s.recs.find(r => r.id !== 'gate' && r.id !== 'ok')
-  rows.push(
-    <Box key="row-meters" flexDirection="row">
-      <Button key="health" plain onPress={() => a.togglePane('health')}>
-        {texts(els, meterRuns)}
+  const buttons = (
+    <Box flexDirection="row" gap={1}>
+      <Button key="pause" plain dimColor={!s.controls.pauseAtNext} onPress={a.togglePause}>
+        <Text color={s.controls.pauseAtNext ? 'warning' : undefined}>{s.controls.pauseAtNext ? '⏸ Pausing' : '⏸ Pause'}</Text>
       </Button>
-      {top && cols >= 120 && (
-        <Button key="rec-top" plain onPress={() => a.act(top)}>
-          <Text color={SEVERITY_COLOR[top.severity]}>{`   ● ${clip(top.title, 28)}`}</Text>
-        </Button>
-      )}
-      <Box flexGrow={1} />
-      <Box flexDirection="row" gap={1}>
-        <Button key="pause" plain dimColor={!s.controls.pauseAtNext} onPress={a.togglePause}>
-          <Text color={s.controls.pauseAtNext ? 'warning' : undefined}>{s.controls.pauseAtNext ? '⏸ Pausing' : '⏸ Pause'}</Text>
-        </Button>
-        <Button key="finish" plain onPress={a.handoff}>
-          <Text color={s.controls.handoffRequested ? 'warning' : 'claude'} bold>
-            {s.controls.handoffRequested ? '⏭ Wrapping up' : '⏭ Finish & handoff'}
-          </Text>
-        </Button>
-        <Button key="open" plain dimColor onPress={() => a.togglePane()}>☰</Button>
-      </Box>
-    </Box>,
+      <Button key="finish" plain onPress={a.handoff}>
+        <Text color={s.controls.handoffRequested ? 'warning' : 'claude'} bold>
+          {s.controls.handoffRequested ? '⏭ Wrapping up' : '⏭ Finish & handoff'}
+        </Text>
+      </Button>
+      <Button key="open" plain dimColor onPress={() => a.togglePane()}>☰</Button>
+    </Box>
   )
+  const meters = (
+    <Button key="health" plain onPress={() => a.togglePane('health')}>
+      {texts(els, meterRuns)}
+    </Button>
+  )
+  // Narrow terminals give the controls a row of their own rather than squeezing them.
+  if (cols < 90) {
+    rows.push(<Box key="row-meters" flexDirection="row">{meters}</Box>)
+    rows.push(
+      <Box key="row-controls" flexDirection="row">
+        <Box flexGrow={1} />
+        {buttons}
+      </Box>,
+    )
+  } else {
+    rows.push(
+      <Box key="row-meters" flexDirection="row">
+        {meters}
+        {top && cols >= 120 && (
+          <Button key="rec-top" plain onPress={() => a.act(top)}>
+            <Text color={SEVERITY_COLOR[top.severity]}>{`   ● ${clip(top.title, 28)}`}</Text>
+          </Button>
+        )}
+        <Box flexGrow={1} />
+        {buttons}
+      </Box>,
+    )
+  }
   return <Box flexDirection="column">{rows}</Box>
 }
 
