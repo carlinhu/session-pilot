@@ -20,7 +20,7 @@ claude plugin install session-pilot@session-pilot
 
 Or in one line, at the prompt of a terminal session: `/plugin install session-pilot --marketplace carlinhu/session-pilot` (answer `y` to add the marketplace, then pick a scope; user = every session).
 
-Then open a new session, or run `/reload-plugins` in an open one.
+Then open a new session.
 
 From a folder (a clone, or an unzipped copy):
 
@@ -29,7 +29,7 @@ claude plugin marketplace add <folder>
 claude plugin install session-pilot@session-pilot
 ```
 
-To get a new version: `claude plugin marketplace update session-pilot`, then `claude plugin update session-pilot@session-pilot`, then open a new session. Sessions (the desktop app's included) run the installed copy, which changes only when the version in `plugin.json` does: a change to the mod ships with a version bump.
+To get a new version: `claude plugin marketplace update session-pilot`, then `claude plugin update session-pilot@session-pilot`, then open a new session. Sessions run the installed copy, which changes only when the version in `plugin.json` does, so a change to the mod ships with a version bump. A session that is already open keeps the code it started with, even after `/reload-plugins` in the desktop app: the band says so ("session-pilot X is installed") when a newer copy exists.
 
 Uninstall: `claude plugin uninstall session-pilot@session-pilot`
 

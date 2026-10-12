@@ -164,6 +164,8 @@ declare module 'claude-code' {
       view: View
       commands: string[]
       derived: Derived
+      /** A newer installed version than the one this session runs, if any. */
+      stale: string | null
     }
   }
 }

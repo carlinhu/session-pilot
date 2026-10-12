@@ -41,6 +41,8 @@ export type Snapshot = {
   recs: Recommendation[]
   model?: string
   effort?: string
+  /** A newer installed version than the one this session runs. */
+  stale?: string | null
 }
 
 export type Actions = {

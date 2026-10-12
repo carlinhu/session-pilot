@@ -899,3 +899,19 @@ export function derive(samples: UsageSample[], activity: Activity, now: number):
 export function activityOf(d: Derived): Activity {
   return { ...d.signals, tests: [], recentErrors: [], turns: 0, startedAt: 0, model: d.model, effort: d.effort }
 }
+
+// ---------------------------------------------------------------- install record
+
+type InstallRecord = { plugins?: Record<string, { installPath?: string; version?: string }[]> }
+
+/** The installed version newer than the copy at `root`, from Claude Code's install record; null when `root` is the installed copy. */
+export function staleVersion(root: string, record: InstallRecord, name: string): string | null {
+  const norm = (p: string) => p.replace(/[\\/]+/g, '/').replace(/\/$/, '').toLowerCase()
+  const mine = norm(root)
+  for (const [key, installs] of Object.entries(record.plugins ?? {})) {
+    if (!key.startsWith(`${name}@`)) continue
+    if (installs.some(i => i.installPath && norm(i.installPath) === mine)) return null
+    return installs.find(i => i.version)?.version ?? null
+  }
+  return null
+}

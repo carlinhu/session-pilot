@@ -70,6 +70,9 @@ export function bandSvg(els: Els, Svg: SvgEl, s: Snapshot, a: Actions, cols: num
     )
   }
 
+  if (s.stale) {
+    alert('row-stale', 'resume', `session-pilot ${s.stale} is installed`, 'this session runs an older copy: open a new session to use it', [])
+  }
   if (s.resume && !s.plan?.nodes.some(n => n.status === 'active')) {
     alert(
       'row-resume',

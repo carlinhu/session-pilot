@@ -51,6 +51,7 @@ const handoffA = atom({ plugin: 'session-pilot', key: 'handoff' } as const, null
 const resumeA = atom({ plugin: 'session-pilot', key: 'resume' } as const, null)
 const viewA = atom({ plugin: 'session-pilot', key: 'view' } as const, { pane: 'plan', collapsed: [], isBandHidden: false } as View)
 const commandsA = atom({ plugin: 'session-pilot', key: 'commands' } as const, [])
+const staleA = atom({ plugin: 'session-pilot', key: 'stale' } as const, null)
 const derivedA = atom({ plugin: 'session-pilot', key: 'derived' } as const, L.derive([], freshActivity(0), 0) as Derived)
 
 /** Tools that only read: allowed while a gate holds the run. */
@@ -187,7 +188,7 @@ async function engage($: $T, plan: Plan, finished: string[]): Promise<Gate | nul
 
 async function snapshot($: $T): Promise<Snapshot> {
   // Reads only what changes visibly: never the raw samples or activity.
-  const [plan, gate, controls, derived, handoff, resume, view, t] = await Promise.all([
+  const [plan, gate, controls, derived, handoff, resume, view, stale, t] = await Promise.all([
     read($, planA),
     read($, gateA),
     read($, controlsA),
@@ -195,6 +196,7 @@ async function snapshot($: $T): Promise<Snapshot> {
     read($, handoffA),
     read($, resumeA),
     read($, viewA),
+    read($, staleA),
     now($),
   ])
   const { sample, five, seven, health } = derived
@@ -223,6 +225,7 @@ async function snapshot($: $T): Promise<Snapshot> {
     recs,
     model: derived.model,
     effort,
+    stale,
   }
 }
 
@@ -247,7 +250,9 @@ async function say($: $T, text: string) {
   }
 }
 
-async function requestHandoff($: $T) {
+async function requestHandoff($: $T): Promise<void> {
+  // Idle means the work is at a stopping point already: nothing to finish, write the handoff now.
+  if (!runningTurn) return quickHandoff($)
   const t = await now($)
   await update($, controlsA, c => ({
     ...c,
@@ -262,8 +267,26 @@ async function requestHandoff($: $T) {
   $.ui.toast('Wrapping up: Claude stops at a consistent point, runs quick checks, then writes a short handoff.', { timeoutMs: 6000 })
 }
 
+/**
+ * Whether a newer copy of this mod is installed than the one this session runs.
+ * A running session keeps the code it started with (a reload does not swap it
+ * on every host), so the band says when only a new session gets the update.
+ */
+async function checkStale($: $T) {
+  const parts = $.plugin.root.split(/[\\/]/)
+  const cache = parts.lastIndexOf('cache')
+  if (cache < 1 || parts[cache - 1] !== 'plugins') return
+  try {
+    const file = `${parts.slice(0, cache).join('/')}/installed_plugins.json`
+    const stale = L.staleVersion($.plugin.root, JSON.parse(await $.fs.read(file)), $.plugin.name)
+    if (stale !== (await read($, staleA))) await update($, staleA, () => stale)
+  } catch {
+    // No install record to compare with: a development folder, or a host that keeps none.
+  }
+}
+
 /** A handoff from what the model already knows: no more work, no checks. */
-async function quickHandoff($: $T) {
+async function quickHandoff($: $T): Promise<void> {
   if (runningTurn) return requestHandoff($)
   const t = await now($)
   await update($, controlsA, c => ({ ...c, handoffRequested: true, handoffRequestedAt: t, stopBlocks: 0, notice: undefined }))
@@ -651,6 +674,10 @@ export const register: Register = on => {
     await update($, activityA, a => (a.startedAt === 0 ? { ...freshActivity(t), model } : { ...a, model: model ?? a.model }))
     await refreshDerived($)
     seenModel = model
+    await checkStale($)
+    $.clock.every(10 * 60_000, () => {
+      void checkStale($)
+    })
     if (usage) await addSample($, sampleFrom(usage, t))
     return next(e)
   })

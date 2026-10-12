@@ -124,6 +124,9 @@ export function bandTerm(els: Els, s: Snapshot, a: Actions, cols: number): Rende
     )
   }
 
+  if (s.stale) {
+    alert('row-stale', '⟳ UPDATE', 'suggestion', `session-pilot ${s.stale} installed: open a new session to use it`, [])
+  }
   if (s.resume && !s.plan?.nodes.some(n => n.status === 'active')) {
     alert('row-resume', '↩ RESUME', 'suggestion', `Handoff from ${fmtDuration(s.now - s.resume.createdAt)} ago${s.resume.nextStep ? ` · next ${s.resume.nextStep}` : ''}`, [
       { key: 'resume', label: 'Resume', primary: true, onPress: a.resume },

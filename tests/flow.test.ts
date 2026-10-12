@@ -295,3 +295,12 @@ test('a session opened long after the handoff only offers to resume', async ($, 
   expect(await band.find({ key: 'resume' })).toBeDefined()
   await band.unmount()
 })
+
+test('handoff while idle writes it at once, with no "finish your work" round', async ($, on) => {
+  engine(on)
+  const ui = await $.ui.mount({ plugin: 'session-pilot', surface: 'desktop', ...BAND })
+  await ui.press({ key: 'finish' })
+  await ui.unmount()
+  expect(submitted.join(' ')).toMatch(/Write a handoff now from what you already know/)
+  expect(submitted.join(' ')).not.toMatch(/nearest consistent point/)
+})

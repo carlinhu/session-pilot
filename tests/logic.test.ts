@@ -181,3 +181,12 @@ test('a handoff stays short whatever the model sends', () => {
   expect(md.length).toBeLessThan(9000)
   expect(md).toContain('34 more left out')
 })
+
+test('a session on an older cached copy learns a newer one is installed', () => {
+  // Windows spells the record's paths with backslashes; the comparison must not care.
+  const winPath = (p: string) => p.replace(/\//g, '\\')
+  const record = { plugins: { 'session-pilot@session-pilot': [{ installPath: winPath('C:/Users/x/.claude/plugins/cache/session-pilot/session-pilot/0.5.0'), version: '0.5.0' }] } }
+  expect(L.staleVersion('C:/Users/x/.claude/plugins/cache/session-pilot/session-pilot/0.4.1', record, 'session-pilot')).toBe('0.5.0')
+  expect(L.staleVersion(winPath('c:/users/x/.claude/plugins/cache/session-pilot/session-pilot/0.5.0/'), record, 'session-pilot')).toBeNull()
+  expect(L.staleVersion('/dev/session-pilot', { plugins: {} }, 'session-pilot')).toBeNull()
+})
