@@ -33,7 +33,7 @@ To get a new version: `claude plugin marketplace update session-pilot`, then `cl
 
 Uninstall: `claude plugin uninstall session-pilot@session-pilot`
 
-The mod writes no files in your projects. Its plan per project lives in one small file, `~/.claude/plugins/data/session-pilot/shared.json` (shared by every session, whichever way the mod is loaded), removed from it when finished or untouched for 14 days. A handoff is never stored: it goes to the clipboard and the pane. Nothing is sent anywhere.
+The mod writes no files in your projects. Everything the mod tracks belongs to one session and is never seen by another, even in the same project. The only thing kept on disk is each session's plan, under that session's id in `~/.claude/plugins/data/session-pilot/shared.json`, so it comes back when you resume that same session; it is removed when finished or untouched for 14 days. A handoff is never stored: it goes to the clipboard and the pane. Nothing is sent anywhere.
 
 ## Architecture
 
@@ -47,7 +47,7 @@ types/index.d.ts     the mod's state contract ($.state)
 tests/               19 tests (logic, flows, UI on terminal and desktop)
 ```
 
-Session state lives in `$.state` (survives hot reload). The plan (`plan:<root>`) lives in the shared data file, so every session of a project sees it.
+Session state lives in `$.state` (survives hot reload). The plan is kept under the session's id (`plan:<session id>`) in the shared data file, so only a resumed copy of that same session sees it.
 
 ### Where the numbers come from
 

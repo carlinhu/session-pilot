@@ -12,6 +12,8 @@ const RUN = { origin: { kind: 'composer' }, presentation: { isFullscreen: false,
 // What the fake surface shows: whether the pane is open.
 const surfacePane = { isOpen: false }
 let clock: ReturnType<typeof mock.clock>
+// The session the engine is: a test switches it to play another session of the same project.
+let sessionId = ''
 // What reached the surface's clipboard and the machine's, and what the surface answers (the desktop app refuses).
 const surfaceClipboard: string[] = []
 const systemClipboard: string[] = []
@@ -37,6 +39,8 @@ function engine(on: On) {
   mock.store(on)
   const files: Record<string, string> = {}
   on('session.root', () => ({ value: '/proj' }))
+  sessionId = '11111111-1111-4111-8111-111111111111'
+  on('session.id', () => ({ value: sessionId }))
   on('session.model', () => ({ value: 'claude-opus-5-5' }))
   on('fs.write', ($, e) => {
     files[e.path] = e.text
@@ -344,4 +348,13 @@ test('where the surface refuses a plugin copy, the machine clipboard takes it', 
   await clock.advance(10)
   expect(systemClipboard).toHaveLength(1)
   expect(systemClipboard[0]).toContain('## Objective')
+})
+
+test("a plan is kept under its session's id, never under the project folder", async ($, on) => {
+  const files = engine(on)
+  await plan($)
+  await update($, { start: 'M1.1' })
+  const shared = Object.entries(files).find(([path]) => /shared\.json$/.test(path))?.[1] ?? '{}'
+  const keys = Object.keys(JSON.parse(shared) as object)
+  expect(keys).toEqual(['plan:11111111-1111-4111-8111-111111111111'])
 })

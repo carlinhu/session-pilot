@@ -208,21 +208,21 @@ function data($: $T): DataStore {
   }
 }
 
-/** Moves what this identity's own store still holds into the shared file, once per session start. */
+/** Clears what older versions left in this identity's own store, once per session start. */
 async function migrateStore($: $T) {
-  if (!(await sharedPath($))) return
-  const shared = data($)
+  // Older versions kept plans and handoffs per project in this identity's own store: none of it belongs to this session.
   for (const key of await $.store.keys()) {
-    if (!key.startsWith('plan:') && !key.startsWith('handoff:')) continue
-    const value = await $.store.get(key)
-    if ((await shared.get(key)) === undefined && value !== undefined) await shared.set(key, value)
-    await $.store.delete(key)
+    if (key.startsWith('plan:') || key.startsWith('handoff:')) await $.store.delete(key)
   }
 }
 
+/** A plan belongs to its session: kept by session id, so it comes back when that session is resumed and is never seen by another. */
 async function planKey($: $T): Promise<string> {
-  return `plan:${await $.session.root()}`
+  return `plan:${await $.session.id()}`
 }
+
+/** A key of the session-scoped shape; older versions keyed plans by project folder, which leaked them across sessions. */
+const SESSION_KEY = /^plan:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 async function savePlan($: $T, plan: Plan | null) {
   await update($, planA, () => plan)
@@ -398,7 +398,9 @@ async function pruneStore($: $T) {
   const t = await now($)
   for (const key of await data($).keys()) {
     const value = (await data($).get(key)) as Record<string, unknown> | undefined
-    if (key.startsWith('plan:')) {
+    if (key.startsWith('plan:') && !SESSION_KEY.test(key)) {
+      await data($).delete(key)
+    } else if (key.startsWith('plan:')) {
       const plan = value as Plan | undefined
       const isFinished = !plan?.nodes?.length || plan.nodes.every(n => n.status === 'done' || n.status === 'skipped')
       if (isFinished || t - (plan?.updatedAt ?? 0) > PLAN_TTL_MS) await data($).delete(key)
@@ -765,6 +767,7 @@ export const register: Register = on => {
       update($, controlsA, c => ({ ...CONTROLS, focusUnit: c.focusUnit, effortOverride: c.effortOverride })),
       update($, activityA, a => ({ ...freshActivity(t), model: a.model, effort: a.effort })),
       update($, handoffA, () => null),
+      update($, planA, () => null),
     ])
     await refreshDerived($)
     return result
