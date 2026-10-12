@@ -1,6 +1,6 @@
 {
   "name": "session-pilot",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Session dashboard: live plan progress above the prompt, hierarchical plan pane, context & usage health, checkpoints, execution limits and handoff to a new session.",
   "types": "./types/index.d.ts"
 }
