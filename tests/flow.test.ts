@@ -16,8 +16,9 @@ let clock: ReturnType<typeof mock.clock>
 const submitted: string[] = []
 // The context each submitted prompt carried.
 const contexts: (readonly string[] | undefined)[] = []
-// What the mod put in the prompt box.
+// What the mod put in the prompt box, and what the box answers (the desktop draws its own: no_composer).
 const filled: string[] = []
+let fillAnswer: { isFilled: boolean; refusal?: 'no_composer' } = { isFilled: true }
 // Slash commands the mod ran through the engine.
 const ran: string[] = []
 
@@ -37,6 +38,11 @@ function engine(on: On) {
     files[e.path] = e.text
     return { value: undefined }
   })
+  on('fs.read', ($, e) => {
+    if (!(e.path in files)) throw new Error('ENOENT')
+    return { value: files[e.path]! }
+  })
+  mock.env(on, { USERPROFILE: '/home/u' })
   on('process.run', () => ({ value: { exitCode: 128, stdout: '', stderr: 'not a repo', isStdoutTruncated: false, isStderrTruncated: false } }))
   on('ui.open', () => {
     surfacePane.isOpen = true
@@ -58,9 +64,10 @@ function engine(on: On) {
   submitted.length = 0
   contexts.length = 0
   filled.length = 0
+  fillAnswer = { isFilled: true }
   on('prompt.fill', ($, e) => {
     filled.push(e.text)
-    return { isFilled: true }
+    return fillAnswer
   })
   on('prompt.submit', ($, e) => {
     submitted.push(e.text)
@@ -149,7 +156,9 @@ test('wrap-up for handoff: refuses new work, sends the model back at Stop, write
   })
   expect(String(written.result)).toMatch(/^Handoff saved\./)
   // No file in the project: the handoff lives in the mod's store and shows in the pane.
-  expect(Object.keys(files)).toHaveLength(0)
+  // Only the mod's shared data file, under the home folder: nothing in the project.
+  expect(Object.keys(files).filter(path => /proj/.test(path))).toHaveLength(0)
+  expect(Object.keys(files).some(path => /session-pilot[\\/]shared\.json$/.test(path))).toBe(true)
   const pane = await $.ui.mount({ plugin: 'session-pilot', surface: 'desktop', component: 'Pane', requestId: 'session-pilot', props: { title: 'Session pilot', isFocused: true, bodyColumns: 70, placement: 'dock', scroll: { offset: 0, bodyRows: 60 }, view: {} } })
   const doc = String((await pane.find({ type: 'Markdown' }))?.props.text)
   expect(doc).toContain('## Objective\nShip auth')
@@ -339,4 +348,23 @@ test('a new prompt instead of the handoff cancels the pending request', async ($
   expect(stop.block).toBeUndefined()
   const start = await update($, { start: 'M1.1' })
   expect(String(start.result)).not.toMatch(/Refused/)
+})
+
+test('where the app draws its own input, the new session sends the handoff itself and drops the copy', async ($, on) => {
+  engine(on)
+  sessionStartBottom(on)
+  await $.tool.call({ tool: 'mcp__session-pilot__handoff_write', objective: 'Ship auth', next_steps: ['Write login form'] })
+  const ui = await $.ui.mount({ plugin: 'session-pilot', surface: 'desktop', ...BAND })
+  await ui.press({ key: 'handoff-new' })
+  await ui.unmount()
+  fillAnswer = { isFilled: false, refusal: 'no_composer' }
+  await clock.advance(5 * 60_000)
+  await $.session.start({ cwd: '/proj', surface: 'desktop', isInteractive: true })
+  await clock.advance(2000)
+  expect(submitted.join(' ')).toMatch(/\[session-pilot handoff\] Continue the work from this handoff/)
+  // Gone once sent: the next session gets nothing.
+  submitted.length = 0
+  await $.session.start({ cwd: '/proj', surface: 'desktop', isInteractive: true })
+  await clock.advance(2000)
+  expect(submitted).toHaveLength(0)
 })

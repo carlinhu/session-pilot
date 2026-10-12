@@ -156,6 +156,71 @@ async function latestSample($: $T): Promise<UsageSample | undefined> {
   return L.latest(await read($, samplesA))
 }
 
+// ---------------------------------------------------------------- data shared by every session
+//
+// Plans and handoffs must reach other sessions, and $.store is per plugin
+// identity: the same mod loaded as an installed plugin and as an inline one
+// keeps two stores, so a handoff queued in one was never seen by the other.
+// They live in one small file in Claude Code's plugin data folder instead,
+// rewritten whole on each change and pruned (never a file in a project).
+
+type Shared = Record<string, unknown>
+type DataStore = {
+  get: (key: string) => Promise<unknown>
+  set: (key: string, value: unknown) => Promise<void>
+  delete: (key: string) => Promise<void>
+  keys: () => Promise<string[]>
+}
+
+async function sharedPath($: $T): Promise<string | undefined> {
+  const home = (await $.env.get('USERPROFILE').catch(() => undefined)) ?? (await $.env.get('HOME').catch(() => undefined))
+  return home ? `${home}/.claude/plugins/data/session-pilot/shared.json` : undefined
+}
+
+async function readShared($: $T, path: string): Promise<Shared> {
+  try {
+    const parsed = JSON.parse(await $.fs.read(path)) as unknown
+    return parsed && typeof parsed === 'object' ? (parsed as Shared) : {}
+  } catch {
+    return {}
+  }
+}
+
+/** The shared file where a home folder is known, else this identity's own store. */
+function data($: $T): DataStore {
+  const edit = async (change: (d: Shared) => void) => {
+    const path = await sharedPath($)
+    if (!path) return
+    const d = await readShared($, path)
+    change(d)
+    await $.fs.write(path, JSON.stringify(d))
+  }
+  return {
+    get: async key => {
+      const path = await sharedPath($)
+      return path ? (await readShared($, path))[key] : $.store.get(key)
+    },
+    set: async (key, value) => ((await sharedPath($)) ? edit(d => void (d[key] = value)) : $.store.set(key, value)),
+    delete: async key => ((await sharedPath($)) ? edit(d => void delete d[key]) : $.store.delete(key)),
+    keys: async () => {
+      const path = await sharedPath($)
+      return path ? Object.keys(await readShared($, path)) : $.store.keys()
+    },
+  }
+}
+
+/** Moves what this identity's own store still holds into the shared file, once per session start. */
+async function migrateStore($: $T) {
+  if (!(await sharedPath($))) return
+  const shared = data($)
+  for (const key of await $.store.keys()) {
+    if (!key.startsWith('plan:') && !key.startsWith('handoff:')) continue
+    const value = await $.store.get(key)
+    if ((await shared.get(key)) === undefined && value !== undefined) await shared.set(key, value)
+    await $.store.delete(key)
+  }
+}
+
 async function planKey($: $T): Promise<string> {
   return `plan:${await $.session.root()}`
 }
@@ -167,8 +232,8 @@ async function handoffKey($: $T): Promise<string> {
 async function savePlan($: $T, plan: Plan | null) {
   await update($, planA, () => plan)
   const key = await planKey($)
-  if (plan) await $.store.set(key, plan)
-  else await $.store.delete(key)
+  if (plan) await data($).set(key, plan)
+  else await data($).delete(key)
 }
 
 /** Engages the gate the finished nodes call for; returns it so the caller can tell the model. */
@@ -299,12 +364,12 @@ const PLAN_TTL_MS = 14 * 86_400_000
 const AUTO_RESUME_MS = 30 * 60_000
 
 async function readBackup($: $T): Promise<HandoffBackup | undefined> {
-  const value = (await $.store.get(await handoffKey($))) as Partial<HandoffBackup> | undefined
+  const value = (await data($).get(await handoffKey($))) as Partial<HandoffBackup> | undefined
   return value && typeof value.markdown === 'string' && typeof value.createdAt === 'number' ? (value as HandoffBackup) : undefined
 }
 
 async function dropBackup($: $T) {
-  await $.store.delete(await handoffKey($))
+  await data($).delete(await handoffKey($))
   await update($, resumeA, () => null)
 }
 
@@ -316,31 +381,39 @@ function resumeText(b: HandoffBackup): string {
   )
 }
 
-/** Fills the input once the composer is there: at a session's start it may not be mounted yet. */
-function fillInput($: $T, text: string, attempt = 0) {
-  $.clock.after(attempt === 0 ? 1200 : 1500, () => {
-    void $.prompt
-      .fill({ text })
-      .then(r => {
-        if (!r.isFilled && r.refusal === 'no_composer' && attempt < 6) fillInput($, text, attempt + 1)
-        else if (r.isFilled) $.ui.toast('session-pilot: the handoff is in the input. Review it and press Enter to continue.', { timeoutMs: 8000 })
-      })
-      .catch(() => undefined)
+/**
+ * Puts the handoff in the input for the person to review and send. Where the
+ * surface draws its own composer (the desktop app), no plugin can fill it:
+ * the handoff is sent as the session's first prompt instead, and the stored
+ * copy goes, since it has reached the session.
+ */
+function fillInput($: $T, text: string) {
+  $.clock.after(1200, () => {
+    void (async () => {
+      const filled = await $.prompt.fill({ text }).catch(() => undefined)
+      if (filled?.isFilled) {
+        $.ui.toast('session-pilot: the handoff is in the input. Review it and press Enter to continue.', { timeoutMs: 8000 })
+        return
+      }
+      await $.prompt.submit({ text })
+      await dropBackup($)
+      $.ui.toast('session-pilot: continuing from the handoff.', { timeoutMs: 6000 })
+    })().catch(() => undefined)
   })
 }
 
 /** Plans finished or untouched for PLAN_TTL_MS and handoffs past HANDOFF_TTL_MS (or in an old shape) leave the store. */
 async function pruneStore($: $T) {
   const t = await now($)
-  for (const key of await $.store.keys()) {
-    const value = (await $.store.get(key)) as Record<string, unknown> | undefined
+  for (const key of await data($).keys()) {
+    const value = (await data($).get(key)) as Record<string, unknown> | undefined
     if (key.startsWith('plan:')) {
       const plan = value as Plan | undefined
       const isFinished = !plan?.nodes?.length || plan.nodes.every(n => n.status === 'done' || n.status === 'skipped')
-      if (isFinished || t - (plan?.updatedAt ?? 0) > PLAN_TTL_MS) await $.store.delete(key)
+      if (isFinished || t - (plan?.updatedAt ?? 0) > PLAN_TTL_MS) await data($).delete(key)
     } else if (key.startsWith('handoff:')) {
       const isCurrent = typeof value?.markdown === 'string' && typeof value?.createdAt === 'number'
-      if (!isCurrent || t - (value.createdAt as number) > HANDOFF_TTL_MS) await $.store.delete(key)
+      if (!isCurrent || t - (value.createdAt as number) > HANDOFF_TTL_MS) await data($).delete(key)
     }
   }
 }
@@ -393,7 +466,7 @@ async function startNewSession($: $T) {
   const backup = await readBackup($)
   if (!backup) return void $.ui.toast('session-pilot: no handoff to continue from.')
   // This session is never cleared. A session opened in this project within AUTO_RESUME_MS finds the handoff in its input.
-  await $.store.set(await handoffKey($), { ...backup, queuedAt: await now($) })
+  await data($).set(await handoffKey($), { ...backup, queuedAt: await now($) })
   $.ui.toast(
     'Handoff queued. Open a new session in this project (New session): the handoff will be in its input, ready to send. This session stays as it is.',
     { timeoutMs: 15000 },
@@ -680,9 +753,10 @@ export const register: Register = on => {
       $.command.register({ name: 'pilot-checkpoint', description: 'Toggle a review checkpoint on a plan item', argumentHint: '<id>', immediate: true }),
     ])
     const t = await now($)
+    await migrateStore($).catch(() => undefined)
     await pruneStore($).catch(() => undefined)
     const [stored, backup, commands, usage, model] = await Promise.all([
-      $.store.get(await planKey($)),
+      data($).get(await planKey($)),
       readBackup($),
       $.command.list().catch(() => []),
       $.session.usage().catch(() => undefined),
@@ -907,7 +981,7 @@ export const register: Register = on => {
     // Kept in the mod's store, never as a file in the project: it leaves the store when sent, dismissed or expired.
     const next = L.upNext(nextPlan, 1)[0]
     const backup: HandoffBackup = { markdown, createdAt: t, nextStep: next ? `${next.id} ${next.title}` : undefined }
-    await $.store.set(await handoffKey($), backup)
+    await data($).set(await handoffKey($), backup)
     const draft: HandoffDraft = { markdown, createdAt: t }
     await update($, handoffA, () => draft)
     await update($, controlsA, c => ({ ...c, handoffRequested: false, notice: undefined, stopBlocks: 0 }))
