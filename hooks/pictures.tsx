@@ -94,7 +94,7 @@ export function bandSvg(els: Els, Svg: SvgEl, s: Snapshot, a: Actions, cols: num
   if (s.handoff) {
     alert('row-handoff', 'handoff', 'Handoff ready', basename(s.handoff.path), [
       { key: 'handoff-review', label: 'Review', onPress: () => a.openPane('handoff') },
-      { key: 'handoff-new', label: 'New session', primary: true, onPress: a.newSession },
+      { key: 'handoff-new', label: 'Use in new session', primary: true, onPress: a.newSession },
     ])
   } else if (s.controls.handoffRequested) {
     alert('row-wrap', 'wrap', 'Wrapping up', 'finishing the current unit, running checks, then writing the handoff', [])
@@ -202,6 +202,9 @@ function executionControls(els: Els, Svg: SvgEl, s: Snapshot, a: Actions, W: num
       <Box flexDirection="row" gap={1} flexWrap="wrap" alignItems="center">
         <Button key="c-handoff" variant="primary" onPress={a.handoff}>
           {s.controls.handoffRequested ? 'Wrapping up for handoff…' : 'Finish task, checkpoint & handoff'}
+        </Button>
+        <Button key="c-quick" onPress={a.quickHandoff}>
+          Handoff now
         </Button>
         <Button key="c-stop" plain dimColor onPress={a.stopNow}>
           Stop now
@@ -403,12 +406,15 @@ function handoffView(els: Els, Svg: SvgEl, s: Snapshot, a: Actions, W: number): 
         {noteSvg(
           Svg,
           'h-about',
-          'Finish & handoff asks Claude to finish the smallest useful unit of the current task, run the relevant checks and write a handoff: objective, decisions, progress, pending work, files, tests and next steps. session-pilot adds what it observed itself: git state, files edited, check commands and their exit status.',
+          'Handoff now: Claude writes a short summary from what it already knows, no more work. Finish & handoff: Claude first stops at a consistent point of the current task and runs quick checks. Either way the handoff is a one-minute read, and this session is never cleared: a new session in this project offers to resume from it.',
           W,
           7,
         )}
-        <Box flexDirection="row">
-          <Button key="h-start" variant="primary" onPress={a.handoff}>
+        <Box flexDirection="row" gap={1} flexWrap="wrap">
+          <Button key="h-quick" variant="primary" onPress={a.quickHandoff}>
+            Handoff now
+          </Button>
+          <Button key="h-start" onPress={a.handoff}>
             {s.controls.handoffRequested ? 'Wrapping up…' : 'Finish task, checkpoint & handoff'}
           </Button>
         </Box>
@@ -427,7 +433,7 @@ function handoffView(els: Els, Svg: SvgEl, s: Snapshot, a: Actions, W: number): 
       {noteSvg(Svg, 'h-path', `${s.handoff.path} — edit the file if you like, then Reload.`, W, 2)}
       <Box flexDirection="row" gap={1} flexWrap="wrap">
         <Button key="h-new" variant="primary" onPress={a.newSession}>
-          Start new session with this handoff
+          Use in a new session
         </Button>
         <Button key="h-reload" onPress={a.reloadHandoff}>
           Reload

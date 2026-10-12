@@ -66,9 +66,11 @@ Nothing is made up: without a reading, the pane shows "n/a".
 | Checkpoint / limit / pause at the next safe point | When a task finishes (`plan_update`, `TodoWrite` or `TaskUpdate`) a *gate* engages. The tool result tells the model to stop; the `tool.call` hook **denies** every tool that changes something (Edit, Write, Bash, Agent…) until you decide. Read-only tools pass. |
 | Releasing the gate | *Continue* / *Continue to X* / *Handoff*, or your own next prompt. |
 | Finish the functional unit first | `plan_update.start` on another open milestone is refused. |
-| Finish current task → safe checkpoint → handoff | A wrap-up prompt (or a notice on the next tool result while a turn runs); `TaskCreate`, `Agent` and starting new tasks are denied; the `classic.Stop` hook sends the model back (at most twice) until `handoff_write` is called. |
+| Finish current task → safe checkpoint → handoff | A wrap-up prompt (stop at a consistent point, quick checks only); `TaskCreate`, `Agent` and starting new tasks are denied; the `classic.Stop` hook sends the model back (at most twice) until `handoff_write` is called. |
+| Handoff now | The model writes the handoff from what it already knows: no more work, no checks. |
+| Short handoffs | The tool schema caps every list and line, and the generator cuts anything longer and leaves out empty sections: a one-minute read. |
 | The plan survives compaction | The `session.compact` hook adds the plan to the summary instructions. |
-| New session with handoff | Saves the file and runs `/clear`; at `SessionStart` (source `clear`) the handoff goes in as `additionalContext` and the prompt is pre-filled for review. A session opened later offers *Resume*. |
+| New session with handoff | *Use in new session* only queues the handoff: the session you are in is never cleared. The next session opened in the project offers *Resume*, which asks the model to read the handoff file. |
 | Stop now | `$.turn.abort` (warns that it may leave the tree inconsistent). |
 
 ## Tools for the model

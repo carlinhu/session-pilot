@@ -77,6 +77,7 @@ export type Actions = {
   continueRun: (limitId?: string) => void
   dismissGate: () => void
   newSession: () => void
+  quickHandoff: () => void
   reloadHandoff: () => void
   discardHandoff: () => void
   resume: () => void
@@ -186,7 +187,7 @@ function bandText(els: Els, s: Snapshot, a: Actions, cols: number, surface: Rend
         <Text color="success">✎</Text>
         <Text wrap="truncate-end">{clip(`Handoff ready: ${basename(s.handoff.path)}`, Math.max(16, cols - 44))}</Text>
         <Button key="handoff-review" onPress={() => a.openPane('handoff')}>Review</Button>
-        <Button key="handoff-new" variant="primary" onPress={a.newSession}>New session ▸</Button>
+        <Button key="handoff-new" variant="primary" onPress={a.newSession}>Use in new session</Button>
       </Box>,
     )
   }
@@ -297,6 +298,7 @@ function controlsRow(els: Els, s: Snapshot, a: Actions): RenderElement {
         <Button key="c-handoff" variant="primary" onPress={a.handoff}>
           {s.controls.handoffRequested ? 'Wrapping up for handoff…' : 'Finish current task, reach a safe checkpoint, and prepare handoff'}
         </Button>
+        <Button key="c-quick" onPress={a.quickHandoff}>Handoff now</Button>
         <Button key="c-stop" plain dimColor onPress={a.stopNow}>■ stop now</Button>
       </Box>
       {s.stop && (
@@ -554,12 +556,13 @@ function handoffView(els: Els, s: Snapshot, a: Actions, cols: number): RenderEle
     return (
       <Box flexDirection="column" gap={1}>
         <Text wrap="wrap">
-          No handoff yet. "Finish & handoff" asks Claude to finish the smallest useful unit of the current task, run the
-          relevant checks, and write a handoff (objective, decisions, progress, pending work, files, tests, next steps).
-          session-pilot adds what it observed itself: git state, files edited, check commands and their exit status.
+          No handoff yet. Handoff now: Claude writes a short summary from what it already knows. Finish & handoff: it first
+          stops at a consistent point and runs quick checks. This session is never cleared: a new session in this project
+          offers to resume from the handoff.
         </Text>
         <Box flexDirection="row" gap={1}>
-          <Button key="h-start" variant="primary" onPress={a.handoff}>
+          <Button key="h-quick" variant="primary" onPress={a.quickHandoff}>Handoff now</Button>
+          <Button key="h-start" onPress={a.handoff}>
             {s.controls.handoffRequested ? 'Wrapping up…' : 'Finish & prepare handoff'}
           </Button>
         </Box>
@@ -570,7 +573,7 @@ function handoffView(els: Els, s: Snapshot, a: Actions, cols: number): RenderEle
     <Box flexDirection="column" gap={1}>
       <Text dimColor wrap="wrap">{`${s.handoff.path} · written ${fmtDuration(s.now - s.handoff.createdAt)} ago · edit the file freely, then Reload`}</Text>
       <Box flexDirection="row" gap={1} flexWrap="wrap">
-        <Button key="h-new" variant="primary" onPress={a.newSession}>Start new session with this handoff</Button>
+        <Button key="h-new" variant="primary" onPress={a.newSession}>Use in a new session</Button>
         <Button key="h-reload" onPress={a.reloadHandoff}>Reload</Button>
         <Button key="h-discard" plain dimColor onPress={a.discardHandoff}>discard</Button>
       </Box>

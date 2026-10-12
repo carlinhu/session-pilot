@@ -748,68 +748,85 @@ export type Observed = {
   model?: string
 }
 
-export function handoffMarkdown(input: HandoffInput, seen: Observed): string {
-  const list = (items: string[] | undefined) =>
-    items && items.length ? items.map(i => `- ${i}`).join('\n') : '- (none recorded)'
-  const out: string[] = []
-  out.push(`# Session handoff`)
-  out.push(`_Written ${new Date(seen.now).toISOString()} by session-pilot in \`${seen.root}\`._`)
-  out.push(`\n## How to resume\n${input.resume ?? 'Read this file, check the working tree against "Observed state", then continue with the first next step.'}`)
-  out.push(`\n## Objective\n${input.objective}`)
-  out.push(`\n## Requirements\n${list(input.requirements)}`)
-  out.push(`\n## Technical decisions\n${list(input.decisions)}`)
-  out.push(`\n## Constraints\n${list(input.constraints)}`)
-  out.push(`\n## Progress\n${input.progress ?? '(not summarized)'}`)
-  if (seen.plan) out.push('\n```text\n' + planText(seen.plan) + '\n```')
-  out.push(`\n## Pending work and dependencies\n${list(input.pending)}`)
-  out.push(
-    `\n## Relevant files\n${
-      input.files?.length ? input.files.map(f => `- \`${f.path}\`${f.note ? ` — ${f.note}` : ''}`).join('\n') : '- (none listed)'
-    }`,
-  )
-  out.push(`\n## Unfinished changes\n${input.unfinished_changes ?? 'None reported.'}`)
-  out.push(
-    `\n## Tests and checks (reported by the model)\n${
-      input.tests?.length ? input.tests.map(t => `- \`${t.command}\`: ${t.result}`).join('\n') : '- (none reported)'
-    }`,
-  )
-  out.push(`\n## Known issues\n${list(input.known_issues)}`)
-  out.push(`\n## Next steps\n${input.next_steps.map((s, i) => `${i + 1}. ${s}`).join('\n')}`)
+const MAX_ITEMS = 6
+const MAX_LINE = 200
+const MAX_TEXT = 500
 
-  out.push(`\n---\n## Observed state (recorded by session-pilot, not by the model)`)
+const cut = (text: string, max: number) => (text.length > max ? text.slice(0, max - 1).trimEnd() + '…' : text)
+
+/** The plan in a few lines: each milestone with its count, the task running, the next ones. */
+export function planBrief(plan: Plan): string {
+  const lines = childrenOf(plan, undefined).map(m => {
+    const p = nodeProgress(plan, m)
+    return `${GLYPH[m.status]} ${m.id} ${m.title} (${p.done}/${p.total})`
+  })
+  const cur = current(plan)
+  const next = upNext(plan, 3).filter(n => n.id !== cur?.id)
+  if (cur) lines.push(`Now: ${cur.id} ${cur.title}`)
+  if (next.length) lines.push(`Next: ${next.map(n => `${n.id} ${n.title}`).join('; ')}`)
+  return lines.join('\n')
+}
+
+/** A short handoff: every list and line is cut to size, empty sections are left out. */
+export function handoffMarkdown(input: HandoffInput, seen: Observed): string {
+  const out: string[] = []
+  const section = (title: string, body: string | undefined) => {
+    if (body && body.trim()) out.push(`\n## ${title}\n${body}`)
+  }
+  const list = (items: string[] | undefined) => {
+    const kept = (items ?? []).filter(Boolean)
+    if (kept.length === 0) return undefined
+    const more = kept.length > MAX_ITEMS ? `\n- …${kept.length - MAX_ITEMS} more left out` : ''
+    return kept.slice(0, MAX_ITEMS).map(i => `- ${cut(i, MAX_LINE)}`).join('\n') + more
+  }
+  const text = (value: string | undefined) => (value ? cut(value, MAX_TEXT) : undefined)
+
+  out.push(`# Session handoff`)
+  out.push(`_${new Date(seen.now).toISOString().slice(0, 16).replace('T', ' ')} UTC · session-pilot_`)
+  section('Objective', text(input.objective))
+  section('Resume', text(input.resume) ?? 'Check the working tree against "Observed state", then start with the first next step.')
+  section('Next steps', input.next_steps.slice(0, MAX_ITEMS).map((s, i) => `${i + 1}. ${cut(s, MAX_LINE)}`).join('\n'))
+  section('Progress', [text(input.progress), seen.plan ? '```text\n' + planBrief(seen.plan) + '\n```' : undefined].filter(Boolean).join('\n\n'))
+  section('Pending', list(input.pending))
+  section('Decisions', list(input.decisions))
+  section('Requirements', list(input.requirements))
+  section('Constraints', list(input.constraints))
+  section('Unfinished changes', text(input.unfinished_changes))
+  section('Known issues', list(input.known_issues))
+  section(
+    'Relevant files',
+    list(input.files?.map(f => `\`${f.path}\`${f.note ? ` — ${f.note}` : ''}`)),
+  )
+  section('Checks (reported)', list(input.tests?.map(t => `\`${cut(t.command, 80)}\`: ${t.result}`)))
+
+  const seenLines: string[] = []
   if (seen.git) {
-    out.push(`- Branch: \`${seen.git.branch}\` · last commit: ${seen.git.lastCommit || '(none)'}`)
-    out.push(
+    seenLines.push(`- Branch \`${seen.git.branch}\` · last commit: ${seen.git.lastCommit || '(none)'}`)
+    seenLines.push(
       seen.git.status.length
-        ? `- Uncommitted (git status):\n${seen.git.status.slice(0, 40).map(l => `  - \`${l}\``).join('\n')}`
+        ? `- Uncommitted: ${seen.git.status.length} file${seen.git.status.length === 1 ? '' : 's'} (${seen.git.status.slice(0, 8).map(l => `\`${l.trim()}\``).join(', ')}${seen.git.status.length > 8 ? ', …' : ''})`
         : '- Working tree clean.',
     )
   } else {
-    out.push('- Not a git repository, or git unavailable.')
+    seenLines.push('- Not a git repository, or git unavailable.')
   }
   const edited = Object.entries(seen.activity.edits).sort((a, b) => b[1] - a[1])
-  out.push(
-    edited.length
-      ? `- Files edited this session:\n${edited.slice(0, 30).map(([f, n]) => `  - \`${f}\` (${n}×)`).join('\n')}`
-      : '- No files edited this session.',
-  )
-  const tests = seen.activity.tests.slice(-8)
-  out.push(
-    tests.length
-      ? `- Check commands run (exit status seen by the engine):\n${tests.map(t => `  - ${t.ok ? 'pass' : 'FAIL'} \`${t.command.slice(0, 120)}\``).join('\n')}`
-      : '- No test or check command was observed.',
-  )
+  if (edited.length) {
+    seenLines.push(`- Edited this session: ${edited.slice(0, 8).map(([f]) => `\`${basename(f)}\``).join(', ')}${edited.length > 8 ? `, +${edited.length - 8} more` : ''}`)
+  }
+  const tests = seen.activity.tests.slice(-3)
+  if (tests.length) seenLines.push(`- Last checks: ${tests.map(t => `${t.ok ? 'pass' : 'FAIL'} \`${cut(t.command, 60)}\``).join(', ')}`)
   const s = seen.sample
   if (s) {
     const parts = [
       s.contextPct !== undefined ? `context ${s.contextPct}%` : undefined,
-      s.fiveHour !== undefined ? `5h window ${s.fiveHour}%` : undefined,
-      s.sevenDay !== undefined ? `weekly ${s.sevenDay}%` : undefined,
-      s.usd !== undefined ? `cost $${s.usd.toFixed(2)}` : undefined,
-      seen.model ? `model ${seen.model}` : undefined,
+      s.fiveHour !== undefined ? `5h ${s.fiveHour}%` : undefined,
+      s.sevenDay !== undefined ? `week ${s.sevenDay}%` : undefined,
+      seen.model,
     ].filter(Boolean)
-    out.push(`- Usage at handoff: ${parts.join(' · ')}`)
+    if (parts.length) seenLines.push(`- Usage: ${parts.join(' · ')}`)
   }
+  out.push(`\n## Observed state (recorded by session-pilot)\n${seenLines.join('\n')}`)
   return out.join('\n') + '\n'
 }
 

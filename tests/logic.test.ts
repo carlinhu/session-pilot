@@ -163,8 +163,21 @@ test('handoff document separates what the model said from what was observed', ()
   )
   expect(md).toContain('## Objective\nShip auth')
   expect(md).toContain('1. Write login form')
-  expect(md).toContain('Observed state (recorded by session-pilot, not by the model)')
-  expect(md).toContain('` M src/a.ts`')
+  expect(md).toContain('## Observed state (recorded by session-pilot)')
+  expect(md).toContain('Uncommitted: 1 file (`M src/a.ts`)')
   expect(md).toContain('pass `npm test`')
-  expect(md).toContain('○ M1.2 Tokens (checkpoint)')
+  expect(md).toContain('○ M1 Backend (0/2)')
+  expect(md).toContain('Next: M1.1 Routes')
+})
+
+test('a handoff stays short whatever the model sends', () => {
+  const long = 'x'.repeat(2000)
+  const many = Array.from({ length: 40 }, (_, i) => `item ${i} ${'y'.repeat(300)}`)
+  const md = L.handoffMarkdown(
+    { objective: long, next_steps: many, decisions: many, pending: many, known_issues: many, progress: long },
+    { now: T0, root: '/proj', activity: { ...ACTIVITY, edits: Object.fromEntries(many.map(m => [m, 1])) }, plan: L.buildPlan(PLAN_INPUT, T0, 'tool', null), sample: undefined },
+  )
+  expect(md.split('\n').length).toBeLessThan(70)
+  expect(md.length).toBeLessThan(9000)
+  expect(md).toContain('34 more left out')
 })

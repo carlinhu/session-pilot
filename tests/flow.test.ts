@@ -11,9 +11,16 @@ const RUN = { origin: { kind: 'composer' }, presentation: { isFullscreen: false,
 
 // What the fake surface shows: whether the pane is open.
 const surfacePane = { isOpen: false }
+// Slash commands the mod ran through the engine.
+const ran: string[] = []
 
 function engine(on: On) {
   surfacePane.isOpen = false
+  ran.length = 0
+  on('command.run', ($, e) => {
+    ran.push(e.command)
+    return { text: '' }
+  })
   mock.clock(on, { now: NOW })
   mock.store(on)
   const files: Record<string, string> = {}
@@ -30,6 +37,11 @@ function engine(on: On) {
   })
   on('ui.close', () => {
     surfacePane.isOpen = false
+  ran.length = 0
+  on('command.run', ($, e) => {
+    ran.push(e.command)
+    return { text: '' }
+  })
     return { value: undefined }
   })
   on('ui.panes', () => ({
@@ -188,5 +200,15 @@ test('Dashboard opens the pane, and closes it when it is open', async ($, on) =>
   expect(surfacePane.isOpen).toBe(true)
   await ui.press({ key: 'open' })
   expect(surfacePane.isOpen).toBe(false)
+  await ui.unmount()
+})
+
+test('using a handoff in a new session never clears this one', async ($, on) => {
+  engine(on)
+  await plan($)
+  await $.tool.call({ tool: 'mcp__session-pilot__handoff_write', objective: 'Ship auth', next_steps: ['Finish M1.1'] })
+  const ui = await $.ui.mount({ plugin: 'session-pilot', surface: 'desktop', ...BAND })
+  await ui.press({ key: 'handoff-new' })
+  expect(ran).not.toContain('clear')
   await ui.unmount()
 })

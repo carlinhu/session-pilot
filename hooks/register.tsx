@@ -57,12 +57,15 @@ let seenEffort: string | undefined
 
 // ---------------------------------------------------------------- prompts the mod sends
 
+const HANDOFF_BRIEF =
+  'Keep the handoff SHORT: a summary someone reads in one minute, not a report. One line per item, at most 6 items per list, no code, no logs, no file contents. Leave out what the next session can read from the code or git.'
 const HANDOFF_STEPS = [
-  'Finish only the smallest useful unit of the current task. Do not start new tasks. If the task is large, stop at the nearest consistent point and record what remains.',
-  'Run the checks relevant to what changed (tests, build, type-check, lint) and fix only what is needed to leave the project consistent and working.',
-  'Record progress with plan_update (or TodoWrite) if a plan exists.',
-  `Call ${HANDOFF_WRITE} with the complete handoff: objective, requirements, decisions, constraints, progress, pending work and dependencies, relevant files, unfinished changes, test results, known issues, next steps and exact resume instructions. Then stop.`,
+  'Stop at the nearest consistent point of the current task. Do not start new work; record what remains instead of doing it.',
+  'Run only quick checks for what changed, if any exist (one test file, a type-check). Skip long suites and note what was not run.',
+  `Call ${HANDOFF_WRITE}. ${HANDOFF_BRIEF} Then stop.`,
 ]
+const QUICK_HANDOFF_PROMPT =
+  `[session-pilot] Write a handoff now from what you already know. Do no more work and run nothing: call ${HANDOFF_WRITE} directly. ${HANDOFF_BRIEF}`
 const HANDOFF_PROMPT =
   '[session-pilot] Finish current task, reach a safe checkpoint, and prepare handoff.\n' +
   HANDOFF_STEPS.map((s, i) => `${i + 1}. ${s}`).join('\n')
@@ -231,7 +234,17 @@ async function requestHandoff($: $T) {
   }))
   await update($, gateA, g => (g && g.kind !== 'handoff' ? null : g))
   if (!runningTurn) await say($, HANDOFF_PROMPT)
-  $.ui.toast('Wrapping up: Claude finishes the current unit, runs checks, then writes the handoff.', { timeoutMs: 6000 })
+  $.ui.toast('Wrapping up: Claude stops at a consistent point, runs quick checks, then writes a short handoff.', { timeoutMs: 6000 })
+}
+
+/** A handoff from what the model already knows: no more work, no checks. */
+async function quickHandoff($: $T) {
+  if (runningTurn) return requestHandoff($)
+  const t = await now($)
+  await update($, controlsA, c => ({ ...c, handoffRequested: true, handoffRequestedAt: t, stopBlocks: 0, notice: undefined }))
+  await update($, gateA, g => (g && g.kind !== 'handoff' ? null : g))
+  await say($, QUICK_HANDOFF_PROMPT)
+  $.ui.toast('Writing a short handoff now.', { timeoutMs: 5000 })
 }
 
 async function continueRun($: $T, limitId?: string) {
@@ -274,12 +287,9 @@ async function startNewSession($: $T) {
   const plan = await read($, planA)
   const nextStep = L.upNext(plan, 1)[0]
   const offer: ResumeOffer = { path: draft.path, createdAt: draft.createdAt, nextStep: nextStep ? `${nextStep.id} ${nextStep.title}` : undefined }
+  // This session is never cleared: the next session opened in this project offers to resume.
   await $.store.set(await handoffKey($), { ...offer, isConsumed: false })
-  try {
-    await $.command.run({ command: 'clear', args: '' })
-  } catch {
-    $.ui.toast('session-pilot: run /clear (or open a new session here); the handoff loads automatically.', { timeoutMs: 10000 })
-  }
+  $.ui.toast('Handoff queued. Open a new session in this project: it offers to resume from it. This session stays as it is.', { timeoutMs: 12000 })
 }
 
 function actions($: $T): Actions {
@@ -319,6 +329,7 @@ function actions($: $T): Actions {
     }),
     toggleFocus: run(() => update($, controlsA, c => ({ ...c, focusUnit: !c.focusUnit }))),
     handoff: run(() => requestHandoff($)),
+    quickHandoff: run(() => quickHandoff($)),
     continueRun: limitId => run(() => continueRun($, limitId))(),
     dismissGate: run(() => update($, gateA, () => null)),
     newSession: run(() => startNewSession($)),
@@ -443,34 +454,38 @@ const PLAN_UPDATE_SPEC = {
   isDeferred: false,
 } as const
 
-const LIST = { type: 'array', items: { type: 'string' } }
+// Short by construction: each list holds a few one-line items; logic.ts cuts anything longer.
+const LIST = { type: 'array', maxItems: 6, items: { type: 'string', maxLength: 200 } }
+const LINE = (description: string) => ({ type: 'string', maxLength: 400, description })
 const HANDOFF_SPEC = {
   name: 'handoff_write',
   description:
-    'Write the session handoff so another session can continue with no loss of context. Call it only when the user asked for a handoff ' +
-    '(session-pilot says so), after finishing the current unit and running the relevant checks. The file is saved under .claude/handoffs/ ' +
-    'and session-pilot appends the git state, files edited and check results it observed.',
+    'Write a SHORT session handoff (a one-minute read) so another session can continue. Call it only when the user asked for a handoff ' +
+    '(session-pilot says so). One line per item, at most 6 items per list; no code, logs or file contents. Saved under .claude/handoffs/; ' +
+    'session-pilot appends the git state, files edited and check results it observed.',
   inputSchema: {
     type: 'object',
     properties: {
-      objective: { type: 'string' },
+      objective: LINE('The goal in one or two sentences.'),
       requirements: LIST,
-      decisions: { ...LIST, description: 'Technical decisions and why.' },
+      decisions: { ...LIST, description: 'Key technical decisions, one line each.' },
       constraints: LIST,
-      progress: { type: 'string', description: 'What is finished, by milestone.' },
-      pending: { ...LIST, description: 'Pending tasks with their dependencies.' },
+      progress: LINE('What is finished, in two or three sentences.'),
+      pending: { ...LIST, description: 'Pending work and its dependencies, one line each.' },
       files: {
         type: 'array',
-        items: { type: 'object', properties: { path: { type: 'string' }, note: { type: 'string' } }, required: ['path'] },
+        maxItems: 8,
+        items: { type: 'object', properties: { path: { type: 'string' }, note: { type: 'string', maxLength: 120 } }, required: ['path'] },
       },
-      unfinished_changes: { type: 'string', description: 'Changes left incomplete, and how to finish or revert them.' },
+      unfinished_changes: LINE('Changes left incomplete, and how to finish or revert them; "none" if clean.'),
       tests: {
         type: 'array',
-        items: { type: 'object', properties: { command: { type: 'string' }, result: { type: 'string' } }, required: ['command', 'result'] },
+        maxItems: 4,
+        items: { type: 'object', properties: { command: { type: 'string' }, result: { type: 'string', maxLength: 120 } }, required: ['command', 'result'] },
       },
       known_issues: LIST,
-      next_steps: LIST,
-      resume: { type: 'string', description: 'Exact instructions to resume: what to read, what to run, where to start.' },
+      next_steps: { ...LIST, description: 'The next steps, in order.' },
+      resume: LINE('How to resume: what to read or run first.'),
     },
     required: ['objective', 'next_steps'],
   },
@@ -597,8 +612,8 @@ export const register: Register = on => {
     return next(e)
   })
 
-  // A /clear begins a new conversation in this process: reset what belongs to
-  // the old one, and hand over the handoff the person chose to carry.
+  // A /clear begins a new conversation in this process: reset what belongs to the old one.
+  // A queued handoff is offered by the band (Resume), never loaded unasked.
   on('classic.SessionStart', async ($, e, next) => {
     const result = await next(e)
     if (e.source !== 'clear') return result
@@ -610,29 +625,11 @@ export const register: Register = on => {
       update($, activityA, a => ({ ...freshActivity(t), model: a.model, effort: a.effort })),
       update($, handoffA, () => null),
     ])
-    const key = await handoffKey($)
-    const pending = (await $.store.get(key)) as (ResumeOffer & { isConsumed?: boolean }) | undefined
-    if (!pending || pending.isConsumed || t - pending.createdAt > 86_400_000) return result
-    await $.store.set(key, { ...pending, isConsumed: true })
-    let text: string
-    try {
-      text = await $.fs.read(pending.path)
-    } catch {
-      return result
+    const pending = (await $.store.get(await handoffKey($))) as (ResumeOffer & { isConsumed?: boolean }) | undefined
+    if (pending && !pending.isConsumed && t - pending.createdAt < 7 * 86_400_000) {
+      await update($, resumeA, () => ({ path: pending.path, createdAt: pending.createdAt, nextStep: pending.nextStep }))
     }
-    $.clock.after(600, () => {
-      void $.prompt
-        .fill({ text: `Continue from the handoff${pending.nextStep ? `: start with ${pending.nextStep}` : ''}.` })
-        .catch(() => undefined)
-    })
-    $.ui.toast('session-pilot: new session started with the handoff loaded as context.', { timeoutMs: 8000 })
-    return {
-      ...result,
-      additionalContext: [
-        ...(result.additionalContext ?? []),
-        `Handoff from the previous session, written by session-pilot (${pending.path}). Treat it as the state of the work; verify "Observed state" against the working tree before relying on it.\n\n${text}`,
-      ],
-    }
+    return result
   })
 
   on('turn.start', async ($, e, next) => {
