@@ -1,0 +1,6 @@
+{
+  "name": "session-pilot",
+  "description": "session-pilot: a session dashboard for Claude Code with checkpoints, execution limits and handoff.",
+  "owner": { "name": "session-pilot" },
+  "plugins": [{ "name": "session-pilot", "source": "./" }]
+}
