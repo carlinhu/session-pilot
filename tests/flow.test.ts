@@ -12,6 +12,10 @@ const RUN = { origin: { kind: 'composer' }, presentation: { isFullscreen: false,
 // What the fake surface shows: whether the pane is open.
 const surfacePane = { isOpen: false }
 let clock: ReturnType<typeof mock.clock>
+// What reached the surface's clipboard and the machine's, and what the surface answers (the desktop app refuses).
+const surfaceClipboard: string[] = []
+const systemClipboard: string[] = []
+let copyAnswer: { isCopied: true } | { isCopied: false; reason: 'no-surface' | 'no-clipboard' | 'refused' } = { isCopied: true }
 // Prompts the mod submitted.
 const submitted: string[] = []
 // The context each submitted prompt carried.
@@ -42,8 +46,20 @@ function engine(on: On) {
     if (!(e.path in files)) throw new Error('ENOENT')
     return { value: files[e.path]! }
   })
-  mock.env(on, { USERPROFILE: '/home/u' })
-  on('process.run', () => ({ value: { exitCode: 128, stdout: '', stderr: 'not a repo', isStdoutTruncated: false, isStderrTruncated: false } }))
+  mock.env(on, { USERPROFILE: '/home/u', OS: 'Windows_NT' })
+  systemClipboard.length = 0
+  surfaceClipboard.length = 0
+  copyAnswer = { isCopied: true }
+  on('process.run', ($, e) => {
+    // The machine's clipboard takes the text; git finds no repository.
+    const isClipboard = e.argv[0] === 'powershell'
+    if (isClipboard) systemClipboard.push(e.init?.stdin ?? '')
+    return { value: { exitCode: isClipboard ? 0 : 128, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('ui.copy', ($, e) => {
+    surfaceClipboard.push(e.text)
+    return { value: copyAnswer }
+  })
   on('ui.open', () => {
     surfacePane.isOpen = true
     return { value: { isPlaced: true } }
@@ -154,7 +170,7 @@ test('wrap-up for handoff: refuses new work, sends the model back at Stop, write
     next_steps: ['Finish M1.1'],
     tests: [{ command: 'npm test', result: 'pass' }],
   })
-  expect(String(written.result)).toMatch(/^Handoff saved\./)
+  expect(String(written.result)).toMatch(/^Handoff written and copied/)
   // No file in the project: the handoff lives in the mod's store and shows in the pane.
   // Only the mod's shared data file, under the home folder: nothing in the project.
   expect(Object.keys(files).filter(path => /proj/.test(path))).toHaveLength(0)
@@ -233,16 +249,6 @@ test('Dashboard opens the pane, and closes it when it is open', async ($, on) =>
   await ui.unmount()
 })
 
-test('using a handoff in a new session never clears this one', async ($, on) => {
-  engine(on)
-  await plan($)
-  await $.tool.call({ tool: 'mcp__session-pilot__handoff_write', objective: 'Ship auth', next_steps: ['Finish M1.1'] })
-  const ui = await $.ui.mount({ plugin: 'session-pilot', surface: 'desktop', ...BAND })
-  await ui.press({ key: 'handoff-new' })
-  expect(ran).not.toContain('clear')
-  await ui.unmount()
-})
-
 test('the main agent is told to keep the plan; subagents may not set it', async ($, on) => {
   engine(on)
   on('prompt.compose', () => ({ sections: [{ id: 'intro', text: 'You are Claude.', scope: 'shared' as const }] }))
@@ -287,47 +293,6 @@ function sessionStartBottom(on: On) {
   on('session.start', ($, e) => ({ cwd: e.cwd }))
 }
 
-test('continuing in a new session: one opened soon after has the handoff in its input; sending it deletes the copy', async ($, on) => {
-  engine(on)
-  sessionStartBottom(on)
-  await $.tool.call({ tool: 'mcp__session-pilot__handoff_write', objective: 'Ship auth', next_steps: ['Write login form'] })
-  const ui = await $.ui.mount({ plugin: 'session-pilot', surface: 'desktop', ...BAND })
-  await ui.press({ key: 'handoff-new' })
-  await ui.unmount()
-  expect(submitted).toHaveLength(0)
-
-  // The new session, ten minutes later.
-  await clock.advance(10 * 60_000)
-  await $.session.start({ cwd: '/proj', surface: 'desktop', isInteractive: true })
-  await clock.advance(2000)
-  expect(submitted).toHaveLength(0)
-  expect(filled).toHaveLength(1)
-  expect(filled[0]).toMatch(/^\[session-pilot handoff\] Continue the work from this handoff/)
-  expect(filled[0]).toContain('## Objective')
-
-  // Sent: the copy is gone, so another session opened now gets nothing.
-  await $.prompt.submit({ text: filled[0]!, wait: false, origin: { kind: 'composer' } })
-  await $.session.start({ cwd: '/proj', surface: 'desktop', isInteractive: true })
-  await clock.advance(2000)
-  expect(filled).toHaveLength(1)
-})
-
-test('a session opened long after the handoff only offers to resume', async ($, on) => {
-  engine(on)
-  sessionStartBottom(on)
-  await $.tool.call({ tool: 'mcp__session-pilot__handoff_write', objective: 'Ship auth', next_steps: ['Write login form'] })
-  const ui = await $.ui.mount({ plugin: 'session-pilot', surface: 'desktop', ...BAND })
-  await ui.press({ key: 'handoff-new' })
-  await ui.unmount()
-  await clock.advance(2 * 3_600_000)
-  await $.session.start({ cwd: '/proj', surface: 'desktop', isInteractive: true })
-  await clock.advance(2000)
-  expect(submitted).toHaveLength(0)
-  const band = await $.ui.mount({ plugin: 'session-pilot', surface: 'desktop', ...BAND })
-  expect(await band.find({ key: 'resume' })).toBeDefined()
-  await band.unmount()
-})
-
 test('handoff while idle writes it at once, with no "finish your work" round', async ($, on) => {
   engine(on)
   const ui = await $.ui.mount({ plugin: 'session-pilot', surface: 'desktop', ...BAND })
@@ -350,21 +315,33 @@ test('a new prompt instead of the handoff cancels the pending request', async ($
   expect(String(start.result)).not.toMatch(/Refused/)
 })
 
-test('where the app draws its own input, the new session sends the handoff itself and drops the copy', async ($, on) => {
+test('a handoff is copied when written and again from its button; nothing is stored, queued or sent', async ($, on) => {
   engine(on)
   sessionStartBottom(on)
   await $.tool.call({ tool: 'mcp__session-pilot__handoff_write', objective: 'Ship auth', next_steps: ['Write login form'] })
+  await clock.advance(10)
+  expect(surfaceClipboard).toHaveLength(1)
+  expect(surfaceClipboard[0]).toMatch(/^Continue the work from this handoff/)
+  expect(surfaceClipboard[0]).toContain('## Objective')
+
   const ui = await $.ui.mount({ plugin: 'session-pilot', surface: 'desktop', ...BAND })
-  await ui.press({ key: 'handoff-new' })
+  await ui.press({ key: 'handoff-copy' })
   await ui.unmount()
-  fillAnswer = { isFilled: false, refusal: 'no_composer' }
-  await clock.advance(5 * 60_000)
+  expect(surfaceClipboard).toHaveLength(2)
+  expect(ran).not.toContain('clear')
+
+  // A session opened later, for anything: it is not taken over.
   await $.session.start({ cwd: '/proj', surface: 'desktop', isInteractive: true })
-  await clock.advance(2000)
-  expect(submitted.join(' ')).toMatch(/\[session-pilot handoff\] Continue the work from this handoff/)
-  // Gone once sent: the next session gets nothing.
-  submitted.length = 0
-  await $.session.start({ cwd: '/proj', surface: 'desktop', isInteractive: true })
-  await clock.advance(2000)
+  await clock.advance(5000)
   expect(submitted).toHaveLength(0)
+  expect(filled).toHaveLength(0)
+})
+
+test('where the surface refuses a plugin copy, the machine clipboard takes it', async ($, on) => {
+  engine(on)
+  copyAnswer = { isCopied: false, reason: 'no-clipboard' }
+  await $.tool.call({ tool: 'mcp__session-pilot__handoff_write', objective: 'Ship auth', next_steps: ['Write login form'] })
+  await clock.advance(10)
+  expect(systemClipboard).toHaveLength(1)
+  expect(systemClipboard[0]).toContain('## Objective')
 })

@@ -4,7 +4,7 @@
 
 import type { Elements, RenderElement, RenderSurface } from 'claude-code'
 
-import type { Controls, Gate, HandoffDraft, Plan, PlanNode, ResumeOffer, UsageSample, View } from '../types'
+import type { Controls, Gate, HandoffDraft, Plan, PlanNode, UsageSample, View } from '../types'
 import { bandSvg, paneSvg } from './pictures'
 import { bandTerm, paneTerm } from './terminal'
 import type { Health, ModelAdvice, Progress, Recommendation, StopPoint, WindowForecast } from './logic'
@@ -28,7 +28,6 @@ export type Snapshot = {
   controls: Controls
   sample: UsageSample | undefined
   handoff: HandoffDraft | null
-  resume: ResumeOffer | null
   view: View
   progress: Progress
   current: PlanNode | undefined
@@ -58,11 +57,9 @@ export type Actions = {
   handoff: () => void
   continueRun: (limitId?: string) => void
   dismissGate: () => void
-  newSession: () => void
+  copyHandoff: (surface?: RenderSurface) => void
   quickHandoff: () => void
   discardHandoff: () => void
-  resume: () => void
-  dismissResume: () => void
   act: (rec: Recommendation) => void
   stopNow: () => void
   clearPlan: () => void

@@ -33,7 +33,7 @@ To get a new version: `claude plugin marketplace update session-pilot`, then `cl
 
 Uninstall: `claude plugin uninstall session-pilot@session-pilot`
 
-The mod writes no files in your projects. Its plan and its one pending handoff per project live in one small file, `~/.claude/plugins/data/session-pilot/shared.json` (shared by every session, whichever way the mod is loaded), and clean themselves up: a handoff is deleted once you send it in a new session, when you dismiss it, or after 7 days unused; a plan when it is finished or untouched for 14 days. Nothing is sent anywhere.
+The mod writes no files in your projects. Its plan per project lives in one small file, `~/.claude/plugins/data/session-pilot/shared.json` (shared by every session, whichever way the mod is loaded), removed from it when finished or untouched for 14 days. A handoff is never stored: it goes to the clipboard and the pane. Nothing is sent anywhere.
 
 ## Architecture
 
@@ -47,7 +47,7 @@ types/index.d.ts     the mod's state contract ($.state)
 tests/               19 tests (logic, flows, UI on terminal and desktop)
 ```
 
-Session state lives in `$.state` (survives hot reload). The plan (`plan:<root>`) and a pending handoff (`handoff:<root>`) live in the shared data file, so every session of a project sees them.
+Session state lives in `$.state` (survives hot reload). The plan (`plan:<root>`) lives in the shared data file, so every session of a project sees it.
 
 ### Where the numbers come from
 
@@ -73,7 +73,7 @@ Nothing is made up: without a reading, the pane shows "n/a".
 | Handoff now | The model writes the handoff from what it already knows: no more work, no checks. Asked while Claude is idle, *Finish & handoff* does the same. A new prompt of yours cancels a pending request. |
 | Short handoffs | The tool schema caps every list and line, and the generator cuts anything longer and leaves out empty sections: a one-minute read. |
 | The plan survives compaction | The `session.compact` hook adds the plan to the summary instructions. |
-| New session with handoff | *Continue in a new session* queues the handoff; the session you are in is never cleared. A session opened in the project within 30 minutes finds the handoff in its input to review and send; where the app draws its own input (the desktop app), it sends the handoff as its first prompt. One opened later offers *Resume*, which does the same. Once sent, the stored copy is deleted. (A mod cannot open a session itself; the app's own session tools are not offered to mods, and a task chip would start in a separate worktree without uncommitted changes.) |
+| New session with handoff | The handoff is copied to the clipboard when written (*Copy handoff* copies it again) and shown in the pane. Open a new session and paste it. Nothing is stored, queued or sent on its own, so a session opened later for something else is never taken over; the session you are in is never cleared. |
 | Stop now | `$.turn.abort` (warns that it may leave the tree inconsistent). |
 
 ## Tools for the model

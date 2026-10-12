@@ -127,12 +127,7 @@ export function bandTerm(els: Els, s: Snapshot, a: Actions, cols: number): Rende
   if (s.stale) {
     alert('row-stale', '⟳ UPDATE', 'suggestion', `session-pilot ${s.stale} installed: open a new session to use it`, [])
   }
-  if (s.resume && !s.plan?.nodes.some(n => n.status === 'active')) {
-    alert('row-resume', '↩ RESUME', 'suggestion', `Handoff from ${fmtDuration(s.now - s.resume.createdAt)} ago${s.resume.nextStep ? ` · next ${s.resume.nextStep}` : ''}`, [
-      { key: 'resume', label: 'Resume', primary: true, onPress: a.resume },
-      { key: 'resume-dismiss', label: 'Dismiss', onPress: a.dismissResume },
-    ])
-  }
+
   if (s.gate && s.gate.kind !== 'handoff' && !s.handoff) {
     const buttons = [{ key: 'gate-continue', label: 'Continue', primary: true, onPress: () => a.continueRun() }]
     if (s.stop && s.stop.id !== s.gate.taskId) buttons.push({ key: 'gate-continue-to', label: `Continue to ${s.stop.id}`, primary: false, onPress: () => a.continueRun(s.stop!.id) })
@@ -143,7 +138,7 @@ export function bandTerm(els: Els, s: Snapshot, a: Actions, cols: number): Rende
   if (s.handoff) {
     alert('row-handoff', '✎ HANDOFF', 'success', `ready · written ${fmtDuration(s.now - s.handoff.createdAt)} ago`, [
       { key: 'handoff-review', label: 'Review', onPress: () => a.openPane('handoff') },
-      { key: 'handoff-new', label: 'Continue in a new session', primary: true, onPress: a.newSession },
+      { key: 'handoff-copy', label: 'Copy handoff', primary: true, onPress: () => a.copyHandoff() },
     ])
   } else if (s.controls.handoffRequested) {
     alert('row-wrap', '⏭ WRAPPING UP', 'permission', 'stopping at a consistent point, quick checks, then a short handoff', [])
@@ -576,7 +571,7 @@ function handoffView(els: Els, s: Snapshot, a: Actions, W: number): RenderElemen
           <Text wrap="wrap">
             Handoff now: a short summary from what Claude already knows. Finish & handoff: it first stops at a consistent point and runs quick checks.
           </Text>
-          <Text dimColor wrap="wrap">This session is never cleared: a new session in this project continues from the handoff.</Text>
+          <Text dimColor wrap="wrap">It is copied to the clipboard and shown here: paste it into a new session. Nothing is stored or sent on its own.</Text>
         </Box>
         <Box flexDirection="row" gap={1} marginTop={1}>
           <Button key="h-quick" variant="primary" onPress={a.quickHandoff}>Handoff now</Button>
@@ -591,10 +586,10 @@ function handoffView(els: Els, s: Snapshot, a: Actions, W: number): RenderElemen
     <Box flexDirection="column">
       <Box borderStyle="round" borderColor="success" paddingX={1} marginTop={1} flexDirection="column">
         {texts(els, [chip('✎ READY', 'success'), { text: ` written ${fmtDuration(s.now - s.handoff.createdAt)} ago`, dim: true }])}
-        <Text dimColor wrap="wrap">Kept by session-pilot, not as a file. A new session gets it in its input to review and send; it is deleted once sent, or after 7 days.</Text>
+        <Text dimColor wrap="wrap">Copied to the clipboard: open a new session and paste it. Nothing is stored; it goes when this session closes.</Text>
       </Box>
       <Box flexDirection="row" gap={1} flexWrap="wrap" marginTop={1}>
-        <Button key="h-new" variant="primary" onPress={a.newSession}>Continue in a new session</Button>
+        <Button key="h-copy" variant="primary" onPress={e => a.copyHandoff(e.surface)}>Copy handoff</Button>
         <Button key="h-discard" plain dimColor onPress={a.discardHandoff}>Discard</Button>
       </Box>
       <Markdown text={s.handoff.markdown} />

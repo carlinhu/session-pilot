@@ -134,22 +134,6 @@ export type Derived = {
 /** The handoff written in this session, shown in the pane. */
 export type HandoffDraft = { markdown: string; createdAt: number }
 
-/**
- * The one handoff kept for a project, in the mod's own store (never a file in
- * the project): written by handoff_write, deleted when the person sends it in
- * a new session, dismisses it, or after HANDOFF_TTL_MS unused.
- */
-export type HandoffBackup = {
-  markdown: string
-  createdAt: number
-  nextStep?: string
-  /** When the person chose to continue in a new session: one opened soon after fills its input with it. */
-  queuedAt?: number
-}
-
-/** The band's offer to continue from a waiting handoff. */
-export type ResumeOffer = { createdAt: number; nextStep?: string }
-
 export type PaneView = 'plan' | 'health' | 'handoff'
 
 export type View = {
@@ -169,7 +153,6 @@ declare module 'claude-code' {
       samples: UsageSample[]
       activity: Activity
       handoff: HandoffDraft | null
-      resume: ResumeOffer | null
       view: View
       commands: string[]
       derived: Derived

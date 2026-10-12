@@ -8,9 +8,9 @@
 // session through SessionStart's additionalContext.
 
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register, SessionRateLimit } from 'claude-code'
+import type { EngineInterface, Register, RenderSurface, SessionRateLimit } from 'claude-code'
 
-import type { Activity, Controls, Derived, Gate, HandoffBackup, HandoffDraft, Plan, PlanNode, UsageSample, View } from '../types'
+import type { Activity, Controls, Derived, Gate, HandoffDraft, Plan, PlanNode, UsageSample, View } from '../types'
 import * as L from './logic'
 import type { Effort, HandoffInput, PlanSetInput, PlanUpdateInput, Recommendation } from './logic'
 import { band, pane, pickEls } from './ui'
@@ -48,7 +48,6 @@ const controlsA = atom({ plugin: 'session-pilot', key: 'controls' } as const, CO
 const samplesA = atom({ plugin: 'session-pilot', key: 'samples' } as const, [])
 const activityA = atom({ plugin: 'session-pilot', key: 'activity' } as const, freshActivity(0))
 const handoffA = atom({ plugin: 'session-pilot', key: 'handoff' } as const, null)
-const resumeA = atom({ plugin: 'session-pilot', key: 'resume' } as const, null)
 const viewA = atom({ plugin: 'session-pilot', key: 'view' } as const, { pane: 'plan', collapsed: [], isBandHidden: false } as View)
 const commandsA = atom({ plugin: 'session-pilot', key: 'commands' } as const, [])
 const staleA = atom({ plugin: 'session-pilot', key: 'stale' } as const, null)
@@ -225,10 +224,6 @@ async function planKey($: $T): Promise<string> {
   return `plan:${await $.session.root()}`
 }
 
-async function handoffKey($: $T): Promise<string> {
-  return `handoff:${await $.session.root()}`
-}
-
 async function savePlan($: $T, plan: Plan | null) {
   await update($, planA, () => plan)
   const key = await planKey($)
@@ -253,13 +248,12 @@ async function engage($: $T, plan: Plan, finished: string[]): Promise<Gate | nul
 
 async function snapshot($: $T): Promise<Snapshot> {
   // Reads only what changes visibly: never the raw samples or activity.
-  const [plan, gate, controls, derived, handoff, resume, view, stale, t] = await Promise.all([
+  const [plan, gate, controls, derived, handoff, view, stale, t] = await Promise.all([
     read($, planA),
     read($, gateA),
     read($, controlsA),
     read($, derivedA),
     read($, handoffA),
-    read($, resumeA),
     read($, viewA),
     read($, staleA),
     now($),
@@ -277,7 +271,6 @@ async function snapshot($: $T): Promise<Snapshot> {
     controls,
     sample,
     handoff,
-    resume,
     view,
     progress: L.progress(plan),
     current: cur,
@@ -350,59 +343,57 @@ async function checkStale($: $T) {
   }
 }
 
-// ---------------------------------------------------------------- the handoff backup
+// ---------------------------------------------------------------- the handoff on the clipboard
 //
-// A handoff is never a file in the project: the mod has no way to delete
-// files, so anything it wrote there would stay. The one handoff of a project
-// lives in the mod's store and leaves it when the person sends it, dismisses
-// it, or after HANDOFF_TTL_MS unused.
+// A handoff is copied to the clipboard and shown in the pane: nothing is
+// queued, stored or sent on its own, so a session opened later for something
+// else is never taken over by an old handoff. The person pastes it where and
+// when they want. It is never a file in the project either.
 
-const HANDOFF_MARKER = '[session-pilot handoff]'
-const HANDOFF_TTL_MS = 7 * 86_400_000
 const PLAN_TTL_MS = 14 * 86_400_000
-/** How long after "Continue in a new session" a session opened in the project fills its input with the handoff. */
-const AUTO_RESUME_MS = 30 * 60_000
 
-async function readBackup($: $T): Promise<HandoffBackup | undefined> {
-  const value = (await data($).get(await handoffKey($))) as Partial<HandoffBackup> | undefined
-  return value && typeof value.markdown === 'string' && typeof value.createdAt === 'number' ? (value as HandoffBackup) : undefined
-}
-
-async function dropBackup($: $T) {
-  await data($).delete(await handoffKey($))
-  await update($, resumeA, () => null)
-}
-
-/** What the new session's input is filled with: the handoff itself, under a marker the mod knows it by when it is sent. */
-function resumeText(b: HandoffBackup): string {
+/** What is copied: the handoff, led by what the session it is pasted into should do with it. */
+function handoffText(markdown: string): string {
   return (
-    `${HANDOFF_MARKER} Continue the work from this handoff. Check its "Observed state" against the working tree, record its next steps ` +
-    `as the plan with plan_set (what is done marked done), then start with the first one.\n\n${b.markdown}`
+    'Continue the work from this handoff. Check its "Observed state" against the working tree, record its next steps ' +
+    'as the plan with plan_set (what is done marked done), then start with the first one.' +
+    String.fromCharCode(10, 10) +
+    markdown
   )
 }
 
-/**
- * Puts the handoff in the input for the person to review and send. Where the
- * surface draws its own composer (the desktop app), no plugin can fill it:
- * the handoff is sent as the session's first prompt instead, and the stored
- * copy goes, since it has reached the session.
- */
-function fillInput($: $T, text: string) {
-  $.clock.after(1200, () => {
-    void (async () => {
-      const filled = await $.prompt.fill({ text }).catch(() => undefined)
-      if (filled?.isFilled) {
-        $.ui.toast('session-pilot: the handoff is in the input. Review it and press Enter to continue.', { timeoutMs: 8000 })
-        return
-      }
-      await $.prompt.submit({ text })
-      await dropBackup($)
-      $.ui.toast('session-pilot: continuing from the handoff.', { timeoutMs: 6000 })
-    })().catch(() => undefined)
-  })
+/** The machine's own clipboard, for surfaces that do not take a plugin's copy (the desktop app). */
+async function copyViaSystem($: $T, text: string): Promise<boolean> {
+  const isWindows = (await $.env.get('OS').catch(() => undefined)) === 'Windows_NT'
+  const commands: string[][] = isWindows
+    ? [['powershell', '-NoProfile', '-NonInteractive', '-Command', '[Console]::InputEncoding=[Text.Encoding]::UTF8; Set-Clipboard -Value ([Console]::In.ReadToEnd())']]
+    : [['pbcopy'], ['wl-copy'], ['xclip', '-selection', 'clipboard']]
+  for (const argv of commands) {
+    try {
+      if ((await $.process.run(argv, { stdin: text, timeoutMs: 10_000 })).exitCode === 0) return true
+    } catch {
+      // Not on this machine: try the next one.
+    }
+  }
+  return false
 }
 
-/** Plans finished or untouched for PLAN_TTL_MS and handoffs past HANDOFF_TTL_MS (or in an old shape) leave the store. */
+/** Copies the session's handoff: the surface's clipboard where it takes one, else the machine's. */
+async function copyHandoff($: $T, surface?: RenderSurface): Promise<void> {
+  const draft = await read($, handoffA)
+  if (!draft) return void $.ui.toast('session-pilot: no handoff written in this session yet.')
+  const text = handoffText(draft.markdown)
+  const viaSurface = await $.ui.copy({ text, surface }).catch(() => undefined)
+  const isCopied = viaSurface?.isCopied === true || (await copyViaSystem($, text))
+  if (isCopied) {
+    $.ui.toast('Handoff copied. Open a new session and paste it (Ctrl+V). This session stays as it is.', { timeoutMs: 10_000 })
+  } else {
+    $.ui.toast('session-pilot: could not reach the clipboard. Select the text in the Handoff tab and copy it.', { timeoutMs: 10_000 })
+    await openPane($, 'handoff')
+  }
+}
+
+/** Plans finished or untouched for PLAN_TTL_MS leave the shared file, and so does any handoff an older version kept there. */
 async function pruneStore($: $T) {
   const t = await now($)
   for (const key of await data($).keys()) {
@@ -412,8 +403,7 @@ async function pruneStore($: $T) {
       const isFinished = !plan?.nodes?.length || plan.nodes.every(n => n.status === 'done' || n.status === 'skipped')
       if (isFinished || t - (plan?.updatedAt ?? 0) > PLAN_TTL_MS) await data($).delete(key)
     } else if (key.startsWith('handoff:')) {
-      const isCurrent = typeof value?.markdown === 'string' && typeof value?.createdAt === 'number'
-      if (!isCurrent || t - (value.createdAt as number) > HANDOFF_TTL_MS) await data($).delete(key)
+      await data($).delete(key)
     }
   }
 }
@@ -462,17 +452,6 @@ async function applyModel($: $T, arg: string) {
   }
 }
 
-async function startNewSession($: $T) {
-  const backup = await readBackup($)
-  if (!backup) return void $.ui.toast('session-pilot: no handoff to continue from.')
-  // This session is never cleared. A session opened in this project within AUTO_RESUME_MS finds the handoff in its input.
-  await data($).set(await handoffKey($), { ...backup, queuedAt: await now($) })
-  $.ui.toast(
-    'Handoff queued. Open a new session in this project (New session): the handoff will be in its input, ready to send. This session stays as it is.',
-    { timeoutMs: 15000 },
-  )
-}
-
 function actions($: $T): Actions {
   const run = (f: () => Promise<unknown>) => () => {
     void f().catch(err => $.ui.toast(`session-pilot: ${String(err).slice(0, 120)}`))
@@ -513,19 +492,11 @@ function actions($: $T): Actions {
     quickHandoff: run(() => quickHandoff($)),
     continueRun: limitId => run(() => continueRun($, limitId))(),
     dismissGate: run(() => update($, gateA, () => null)),
-    newSession: run(() => startNewSession($)),
+    copyHandoff: surface => run(() => copyHandoff($, surface))(),
     discardHandoff: run(async () => {
       await update($, handoffA, () => null)
-      await dropBackup($)
       await update($, gateA, g => (g?.kind === 'pause' && g.reason.startsWith('Handoff') ? null : g))
     }),
-    resume: run(async () => {
-      const backup = await readBackup($)
-      await update($, resumeA, () => null)
-      // The backup stays until the filled prompt is sent.
-      if (backup) fillInput($, resumeText(backup))
-    }),
-    dismissResume: run(() => dropBackup($)),
     act: (rec: Recommendation) =>
       run(async () => {
         switch (rec.action) {
@@ -755,9 +726,8 @@ export const register: Register = on => {
     const t = await now($)
     await migrateStore($).catch(() => undefined)
     await pruneStore($).catch(() => undefined)
-    const [stored, backup, commands, usage, model] = await Promise.all([
+    const [stored, commands, usage, model] = await Promise.all([
       data($).get(await planKey($)),
-      readBackup($),
       $.command.list().catch(() => []),
       $.session.usage().catch(() => undefined),
       $.session.model().catch(() => undefined),
@@ -765,12 +735,6 @@ export const register: Register = on => {
     const plan = stored as Plan | undefined
     if (plan && (await read($, planA)) === null && plan.nodes.some(n => n.status !== 'done' && n.status !== 'skipped')) {
       await update($, planA, () => plan)
-    }
-    if (backup && backup.queuedAt !== undefined && t - backup.queuedAt < AUTO_RESUME_MS) {
-      // The person asked for a new session from the handoff a moment ago: this is it. The text waits in the input; sending it drops the backup.
-      fillInput($, resumeText(backup))
-    } else if (backup) {
-      await update($, resumeA, () => ({ createdAt: backup.createdAt, nextStep: backup.nextStep }))
     }
     await update($, commandsA, () => commands.map(c => c.name).filter(n => n === 'model' || n === 'effort'))
     await update($, activityA, a => (a.startedAt === 0 ? { ...freshActivity(t), model } : { ...a, model: model ?? a.model }))
@@ -803,8 +767,6 @@ export const register: Register = on => {
       update($, handoffA, () => null),
     ])
     await refreshDerived($)
-    const backup = await readBackup($)
-    if (backup) await update($, resumeA, () => ({ createdAt: backup.createdAt, nextStep: backup.nextStep }))
     return result
   })
 
@@ -857,10 +819,7 @@ export const register: Register = on => {
       }))
     }
     const context: string[] = []
-    if (e.text.includes(HANDOFF_MARKER)) {
-      // The person sent the handoff: it has reached the session, so the backup goes.
-      await dropBackup($)
-    } else if (controls.handoffRequested) {
+    if (controls.handoffRequested) {
       // A new prompt instead of the handoff: the person moved on, so stop asking for it.
       await update($, controlsA, c => ({ ...c, handoffRequested: false, stopBlocks: 0, notice: undefined }))
     }
@@ -963,7 +922,6 @@ export const register: Register = on => {
     const git = await gitState($, root)
     const markdown = L.handoffMarkdown(input, { now: t, root, git, activity, plan, sample, model })
     // A handoff with no plan behind it seeds one from its next steps, so the next session opens with a plan.
-    let nextPlan = plan
     if (!plan || plan.nodes.every(n => n.status === 'done' || n.status === 'skipped')) {
       const seeded = L.buildPlan(
         {
@@ -976,21 +934,17 @@ export const register: Register = on => {
         null,
       )
       await savePlan($, seeded)
-      nextPlan = seeded
     }
-    // Kept in the mod's store, never as a file in the project: it leaves the store when sent, dismissed or expired.
-    const next = L.upNext(nextPlan, 1)[0]
-    const backup: HandoffBackup = { markdown, createdAt: t, nextStep: next ? `${next.id} ${next.title}` : undefined }
-    await data($).set(await handoffKey($), backup)
+    // Never stored or queued: it is shown in the pane and copied to the clipboard, for the person to paste where they want.
     const draft: HandoffDraft = { markdown, createdAt: t }
     await update($, handoffA, () => draft)
     await update($, controlsA, c => ({ ...c, handoffRequested: false, notice: undefined, stopBlocks: 0 }))
-    await update($, gateA, () => ({ kind: 'pause', reason: 'Handoff written: review it, then start a new session', at: t }))
+    await update($, gateA, () => ({ kind: 'pause', reason: 'Handoff written and copied: paste it in a new session', at: t }))
     await update($, viewA, v => ({ ...v, pane: 'handoff' as const }))
     void $.ui.open({ id: PANE, title: 'Session pilot', columns: 72 }).catch(() => undefined)
-    void $.ui.notify('Handoff ready for review.', { title: 'session-pilot' }).catch(() => undefined)
+    void copyHandoff($).catch(() => undefined)
     return {
-      result: 'Handoff saved. Stop now: start no more work. Tell the user in one or two sentences that the handoff is ready for review in the session-pilot pane.',
+      result: 'Handoff written and copied to the clipboard. Stop now: start no more work. Tell the user in one sentence that they can paste it into a new session.',
     }
   })
 

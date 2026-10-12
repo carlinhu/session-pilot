@@ -73,18 +73,7 @@ export function bandSvg(els: Els, Svg: SvgEl, s: Snapshot, a: Actions, cols: num
   if (s.stale) {
     alert('row-stale', 'resume', `session-pilot ${s.stale} is installed`, 'this session runs an older copy: open a new session to use it', [])
   }
-  if (s.resume && !s.plan?.nodes.some(n => n.status === 'active')) {
-    alert(
-      'row-resume',
-      'resume',
-      'Continue where you left off',
-      `handoff from ${fmtDuration(s.now - s.resume.createdAt)} ago${s.resume.nextStep ? ` · next ${s.resume.nextStep}` : ''}`,
-      [
-        { key: 'resume', label: 'Resume', primary: true, onPress: a.resume },
-        { key: 'resume-dismiss', label: 'Dismiss', onPress: a.dismissResume },
-      ],
-    )
-  }
+
   if (s.gate && s.gate.kind !== 'handoff' && !s.handoff) {
     const buttons: AlertButton[] = [{ key: 'gate-continue', label: 'Continue', primary: true, onPress: () => a.continueRun() }]
     if (s.stop && s.stop.id !== s.gate.taskId) {
@@ -97,7 +86,7 @@ export function bandSvg(els: Els, Svg: SvgEl, s: Snapshot, a: Actions, cols: num
   if (s.handoff) {
     alert('row-handoff', 'handoff', 'Handoff ready', `written ${fmtDuration(s.now - s.handoff.createdAt)} ago`, [
       { key: 'handoff-review', label: 'Review', onPress: () => a.openPane('handoff') },
-      { key: 'handoff-new', label: 'Continue in a new session', primary: true, onPress: a.newSession },
+      { key: 'handoff-copy', label: 'Copy handoff', primary: true, onPress: () => a.copyHandoff() },
     ])
   } else if (s.controls.handoffRequested) {
     alert('row-wrap', 'wrap', 'Wrapping up', 'finishing the current unit, running checks, then writing the handoff', [])
@@ -407,7 +396,7 @@ function handoffView(els: Els, Svg: SvgEl, s: Snapshot, a: Actions, W: number): 
         {noteSvg(
           Svg,
           'h-about',
-          'Handoff now: Claude writes a short summary from what it already knows, no more work. Finish & handoff: Claude first stops at a consistent point of the current task and runs quick checks. Either way the handoff is a one-minute read, and this session is never cleared: a new session in this project offers to resume from it.',
+          'Handoff now: Claude writes a short summary from what it already knows, no more work. Finish & handoff: Claude first stops at a consistent point of the current task and runs quick checks. Either way the handoff is a one-minute read, copied to the clipboard and shown here: paste it into a new session. Nothing is stored or sent on its own, and this session is never cleared.',
           W,
           7,
         )}
@@ -431,10 +420,10 @@ function handoffView(els: Els, Svg: SvgEl, s: Snapshot, a: Actions, W: number): 
         width={W}
         height={30}
       />
-      {noteSvg(Svg, 'h-where', 'Kept by session-pilot, not as a file in your project. Continue in a new session: the text waits in its input for you to review and send. It is deleted once sent, or after 7 days unused.', W, 3)}
+      {noteSvg(Svg, 'h-where', 'Copied to the clipboard: open a new session and paste it (Ctrl+V). Nothing is stored or sent on its own; it goes when this session closes.', W, 3)}
       <Box flexDirection="row" gap={1} flexWrap="wrap">
-        <Button key="h-new" variant="primary" onPress={a.newSession}>
-          Continue in a new session
+        <Button key="h-copy" variant="primary" onPress={e => a.copyHandoff(e.surface)}>
+          Copy handoff
         </Button>
         <Button key="h-discard" plain dimColor onPress={a.discardHandoff}>
           Discard
